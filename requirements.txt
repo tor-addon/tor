@@ -3,3 +3,4 @@ uvicorn[standard]>=0.29.0
 requests>=2.31.0
 rapidfuzz>=3.6.0
 PTT>=0.1.0
+python-multipart>=0.0.9
