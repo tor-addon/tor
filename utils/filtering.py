@@ -15,7 +15,7 @@ import logging
 import re
 import unicodedata
 
-from PTT import parse_title
+from ptt import parse_title
 from rapidfuzz import fuzz
 
 logger = logging.getLogger(__name__)

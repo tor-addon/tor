@@ -1,5 +1,3 @@
-# Author: adam
-
 """
 utils/episode_selector.py
 ─────────────────────────
@@ -18,7 +16,7 @@ Fallback: if nothing matches explicitly, return the largest video file (best-gue
 import logging
 import re
 
-from PTT import parse_title
+from ptt import parse_title
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +106,7 @@ def _parse_file(f: dict) -> dict:
     We combine folder path + filename for maximum context
     (e.g. "Breaking.Bad.S03/Breaking.Bad.S03E05.mkv" is richer than the filename alone).
     """
-    context = f"{f['n']}".strip()
+    context = f"{f.get('path', '')} {f['n']}".strip()
     return parse_title(context)
 
 
