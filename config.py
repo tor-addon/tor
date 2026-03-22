@@ -1,12 +1,7 @@
 """
 config.py
 ─────────
-UserConfig: all per-user settings encoded as base64-JSON in the URL.
-
-URL structure:
-  /{b64_config}/manifest.json
-  /{b64_config}/stream/{type}/{id}.json
-  /{b64_config}/playback/{token}
+UserConfig encoded as base64url-JSON in the URL.
 """
 
 import base64
@@ -18,18 +13,19 @@ from settings import DEFAULT_LANGUAGE, DEFAULT_MIN_MATCH, DEFAULT_SEARCH_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
-# Display format constants
-FORMAT_EPURE   = "epure"    # Tor / Source | 🔵 res | quality \n 🌐 langs | size \n name
-FORMAT_COMPACT = "compact"  # resolution • quality • size
+FORMAT_EPURE   = "epure"
+FORMAT_COMPACT = "compact"
 
 
 @dataclass
 class UserConfig:
     alldebrid_key:   str        = ""
     language:        str        = DEFAULT_LANGUAGE
+    vostfr:          bool       = False     # accept VOSTFR in addition to VF
     min_match:       float      = DEFAULT_MIN_MATCH
     search_timeout:  float      = DEFAULT_SEARCH_TIMEOUT
     enable_movix:    bool       = True
+    movix_url:       str        = ""        # overrides MOVIX_API_BASE_URL if set
     display_format:  str        = FORMAT_EPURE
     torznab_sources: list[dict] = field(default_factory=list)
 
@@ -37,9 +33,11 @@ class UserConfig:
         payload = {
             "ak": self.alldebrid_key,
             "lg": self.language,
+            "vo": self.vostfr,
             "mm": self.min_match,
             "st": self.search_timeout,
             "mx": self.enable_movix,
+            "mu": self.movix_url,
             "df": self.display_format,
             "tz": self.torznab_sources,
         }
@@ -55,9 +53,11 @@ class UserConfig:
             return cls(
                 alldebrid_key   = data.get("ak", ""),
                 language        = data.get("lg", DEFAULT_LANGUAGE),
+                vostfr          = bool(data.get("vo", False)),
                 min_match       = float(data.get("mm", DEFAULT_MIN_MATCH)),
                 search_timeout  = float(data.get("st", DEFAULT_SEARCH_TIMEOUT)),
                 enable_movix    = bool(data.get("mx", True)),
+                movix_url       = data.get("mu", ""),
                 display_format  = data.get("df", FORMAT_EPURE),
                 torznab_sources = data.get("tz", []),
             )

@@ -19,6 +19,7 @@ Short-lived request dedup cache (TTL=15s):
 import asyncio
 import logging
 import time
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -88,8 +89,21 @@ async def root():
 
 @router.get("/configure", response_class=HTMLResponse)
 async def configure_page():
-    with open("static/configure.html", encoding="utf-8") as f:
-        return f.read()
+    static_path = Path(__file__).parent / "static" / "configure.html"
+    return static_path.read_text(encoding="utf-8")
+
+
+@router.get("/{b64_config}/configure", response_class=HTMLResponse)
+async def configure_preload(request: Request, b64_config: str):
+    """Config page pre-filled with current user config. Called by Stremio 'Configure' button."""
+    static_path = Path(__file__).parent / "static" / "configure.html"
+    html = static_path.read_text(encoding="utf-8")
+    # Inject the config so JS can decode and pre-fill the form
+    html = html.replace(
+        "// PRELOAD_CONFIG_PLACEHOLDER",
+        f"const PRELOAD_CONFIG = {repr(b64_config)};",
+    )
+    return html
 
 
 @router.get("/manifest.json")
@@ -98,8 +112,9 @@ async def manifest_root():
 
 
 @router.get("/{b64_config}/manifest.json")
-async def manifest(b64_config: str):
-    return JSONResponse(_build_manifest(configured=True), headers=_cors())
+async def manifest(request: Request, b64_config: str):
+    base_url = str(request.base_url).rstrip("/")
+    return JSONResponse(_build_manifest(configured=True, base_url=base_url, b64_config=b64_config), headers=_cors())
 
 
 @router.get("/{b64_config}/stream/{media_type}/{stremio_id:path}")
@@ -199,8 +214,8 @@ async def playback(b64_config: str, token: str):
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
-def _build_manifest(configured: bool = False) -> dict:
-    return {
+def _build_manifest(configured: bool = False, base_url: str = "", b64_config: str = "") -> dict:
+    manifest = {
         "id":          ADDON_ID,
         "version":     ADDON_VERSION,
         "name":        ADDON_NAME,
@@ -215,6 +230,10 @@ def _build_manifest(configured: bool = False) -> dict:
             "configurationRequired": not configured,
         },
     }
+    # Stremio uses configureUrl to show a "Configure" button for installed addons
+    if configured and base_url and b64_config:
+        manifest["behaviorHints"]["configureUrl"] = f"{base_url}/{b64_config}/configure"
+    return manifest
 
 
 def _format_stream(

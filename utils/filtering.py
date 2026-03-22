@@ -43,7 +43,7 @@ class StreamFilter:
     __slots__ = (
         "media_type", "tmdb_year", "min_match",
         "target_season", "target_episode", "target_language",
-        "remove_trash", "_tmdb_titles",
+        "vostfr", "remove_trash", "_tmdb_titles",
     )
 
     def __init__(
@@ -53,6 +53,7 @@ class StreamFilter:
         target_season: int | None = None,
         target_episode: int | None = None,
         target_language: str | None = None,
+        vostfr: bool = False,
         remove_trash: bool = True,
     ) -> None:
         self.media_type      = tmdb_info.get("type")
@@ -61,6 +62,7 @@ class StreamFilter:
         self.target_season   = target_season
         self.target_episode  = target_episode
         self.target_language = target_language.lower() if target_language else None
+        self.vostfr          = vostfr
         self.remove_trash    = remove_trash
 
         self._tmdb_titles: list[str] = [
@@ -124,7 +126,16 @@ class StreamFilter:
         # ── 2. Language ──────────────────────────────────────────────────────
         if self.target_language:
             langs: list = stream.get("languages") or []
-            if self.target_language not in {str(l).lower() for l in langs}:
+            lang_set = {str(l).lower() for l in langs}
+            has_target = self.target_language in lang_set
+
+            # VOSTFR: accept if stream has FR subtitles even with foreign audio
+            if not has_target and self.vostfr:
+                subs = stream.get("subtitles") or []
+                sub_set = {str(s).lower() for s in subs}
+                has_target = self.target_language in sub_set
+
+            if not has_target:
                 stream["invalid_reason"] = "Language"
                 return False
 

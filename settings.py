@@ -9,7 +9,7 @@ Change a base URL here → it propagates everywhere.
 
 # ── AllDebrid ─────────────────────────────────────────────────────────────────
 ALLDEBRID_BASE_URL = "https://api.alldebrid.com/v4"
-ALLDEBRID_AGENT    = "stremio_addon"
+ALLDEBRID_AGENT    = "Tor"
 
 # ── TMDB ──────────────────────────────────────────────────────────────────────
 TMDB_BASE_URL      = "https://api.themoviedb.org/3"
@@ -31,7 +31,6 @@ DEFAULT_MIN_MATCH     = 75.0
 DEFAULT_SEARCH_TIMEOUT = 5.0
 TORZNAB_RESULT_LIMIT  = 100
 ALLDEBRID_BATCH_SIZE  = 80
-ALLDEBRID_UID_COOKIE  = os.environ.get("AD_UID_COOKIE", "")
 
 # ── Addon metadata ────────────────────────────────────────────────────────────
 ADDON_ID          = "community.stremio-tor"

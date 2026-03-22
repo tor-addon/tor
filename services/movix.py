@@ -120,11 +120,14 @@ def _episode_filter(episode: int) -> str:
 
 
 class MovixClient:
-    __slots__ = ("session",)
+    __slots__ = ("session", "_api_base", "_decode_base")
 
-    def __init__(self) -> None:
-        self.session = requests.Session()
+    def __init__(self, base_url: str = "") -> None:
+        self.session     = requests.Session()
         self.session.headers.update(_API_HEADERS)
+        # Allow custom base URL from user config
+        self._api_base   = base_url.rstrip("/") if base_url else MOVIX_API_BASE_URL
+        self._decode_base = MOVIX_DECODE_BASE_URL
 
     # ─────────────────────────────────────────────────────────────────────────
     # 1. ID resolution
@@ -158,7 +161,7 @@ class MovixClient:
     ) -> int | None:
         query = title.replace(" ", "+")
         try:
-            r = self.session.get(f"{MOVIX_API_BASE_URL}/search/{query}", timeout=8)
+            r = self.session.get(f"{self._api_base}/search/{query}", timeout=8)
             r.raise_for_status()
             results = r.json().get("results") or []
         except Exception as exc:
@@ -203,7 +206,7 @@ class MovixClient:
             params["filters"] = _episode_filter(episode)
 
         try:
-            r = self.session.get(f"{MOVIX_API_BASE_URL}/liens", params=params, timeout=8)
+            r = self.session.get(f"{self._api_base}/liens", params=params, timeout=8)
             r.raise_for_status()
             raw_streams = r.json().get("pagination", {}).get("data") or []
         except Exception as exc:
