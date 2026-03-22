@@ -19,11 +19,20 @@ logger = logging.getLogger(__name__)
 
 
 class AllDebridClient:
-    __slots__ = ("api_key", "session")
+    __slots__ = ("api_key", "_uid", "session")
 
-    def __init__(self, api_key: str) -> None:
+    def __init__(self, api_key: str, uid_cookie: str = "") -> None:
         self.api_key = api_key
+        self._uid    = uid_cookie   # bypasses server IP block on cache check
         self.session = requests.Session()
+        if self._uid:
+            # Internal API needs a browser-like cookie + user-agent
+            self.session.cookies.set("uid", self._uid)
+            self.session.headers["user-agent"] = (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/146.0.0.0 Safari/537.36"
+            )
 
     # ─────────────────────────────────────────────────────────────────────────
     # Cache check
@@ -168,8 +177,17 @@ class AllDebridClient:
             logger.warning("AllDebrid │ delete failed id=%s: %s", magnet_id, exc)
 
     def _check_batch(self, batch: list[str], hash_map: dict[str, list[dict]]) -> None:
-        payload = {"agent": ALLDEBRID_AGENT, "apikey": self.api_key, "magnets[]": batch}
-        r = self.session.post(f"{ALLDEBRID_BASE_URL}/magnet/upload", data=payload, timeout=15)
+        if self._uid:
+            # Internal API: bypasses NO_SERVER restriction, uses multipart form
+            files = [("magnets[]", (None, h)) for h in batch]
+            r = self.session.post(
+                "https://alldebrid.com/internalapi/v4/magnet/upload",
+                files=files,
+                timeout=15,
+            )
+        else:
+            payload = {"agent": ALLDEBRID_AGENT, "apikey": self.api_key, "magnets[]": batch}
+            r = self.session.post(f"{ALLDEBRID_BASE_URL}/magnet/upload", data=payload, timeout=15)
         r.raise_for_status()
         body = r.json()
 

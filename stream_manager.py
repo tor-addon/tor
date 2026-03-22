@@ -25,7 +25,7 @@ from utils.deduplicator import StreamDeduplicator
 from utils.filtering import StreamFilter
 from utils.tmdb import TMDBApi
 from utils import ranking
-from settings import DEFAULT_LANGUAGE, DEFAULT_MIN_MATCH, DEFAULT_SEARCH_TIMEOUT
+from settings import DEFAULT_LANGUAGE, DEFAULT_MIN_MATCH, DEFAULT_SEARCH_TIMEOUT, ALLDEBRID_UID_COOKIE
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,7 @@ class StreamManager:
         self._enable_movix   = enable_movix
 
         self._tmdb    = TMDBApi(tmdb_api_key)
-        self._ad      = AllDebridClient(alldebrid_api_key)
+        self._ad      = AllDebridClient(alldebrid_api_key, uid_cookie=ALLDEBRID_UID_COOKIE)
         self._movix   = MovixClient() if enable_movix else None
         self._sources = [
             Torznab(s["name"], s["url"], s.get("apikey"))
