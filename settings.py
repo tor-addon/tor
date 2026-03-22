@@ -1,3 +1,5 @@
+import os
+
 """
 settings.py
 ───────────
@@ -36,4 +38,4 @@ ADDON_NAME        = "Tor"
 ADDON_VERSION     = "1.0.0"
 ADDON_DESCRIPTION = "Streams FR via AllDebrid – Torznab + Movix"
 ADDON_LOGO        = "https://images.icon-icons.com/2552/PNG/512/tor_alpha_browser_logo_icon_152957.png"
-LOG_LEVEL         = "INFO"
+LOG_LEVEL         = os.environ.get("LOG_LEVEL", "INFO")
