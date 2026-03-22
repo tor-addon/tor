@@ -321,14 +321,18 @@ def _format_stream(
         description = " • ".join(right_parts)
 
     return {
-        "name":        name,
-        "description": description,
-        "url":         f"{base_url}/{b64_config}/playback/{token}",
-        "behaviorHints": {
-            "notWebReady": False,
-            "bingeGroup":  f"{ADDON_ID}-{resolution}",
-        },
-    }
+            "name":        name,
+            "description": description,
+            "url":         f"{base_url}/{b64_config}/playback/{token}",
+            # ── Ces 3 champs sont critiques pour Android TV ──
+            "notWebReady": True,                                    # MKV ≠ MP4
+            "filename":    stream.get("torrent_name", "") + ".mkv", # ExoPlayer détecte le container
+            "videoSize":   stream.get("size", 0),                   # aide le player à allouer le buffer
+            "behaviorHints": {
+                "notWebReady": True,                                # redondant mais certains clients lisent ici
+                "bingeGroup":  f"{ADDON_ID}-{resolution}",
+            },
+        }
 
 
 def _cors() -> dict:
