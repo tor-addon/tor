@@ -98,7 +98,8 @@ class AllDebridClient:
             return self._unlock(best["l"])
         finally:
             if magnet_id is not None:
-                self._delete_magnet(magnet_id)
+                pass
+                #self._delete_magnet(magnet_id)
 
     # ─────────────────────────────────────────────────────────────────────────
     # DDL unlock

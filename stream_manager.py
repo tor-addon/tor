@@ -87,6 +87,8 @@ class StreamManager:
 
         torznab_results, movix_results = await asyncio.gather(torznab_task, movix_task)
 
+
+
         raw = torznab_results + movix_results
         logger.info(
             "[%s] raw: %d total  (torznab=%d  movix=%d)",
