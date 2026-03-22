@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Tor – Configuration</title>
+  <style>
+    :root {
+      --bg:      #0d0e14;
+      --surface: #161820;
+      --card:    #1c1e2a;
+      --border:  #272a3a;
+      --accent:  #7b68ee;
+      --accent2: #9b8fff;
+      --text:    #dde1f0;
+      --muted:   #5a607a;
+      --green:   #5dbb7e;
+      --red:     #e06c75;
+      --yellow:  #e5c07b;
+      --r:       10px;
+    }
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{background:var(--bg);color:var(--text);font-family:'Inter',-apple-system,sans-serif;
+         min-height:100vh;display:flex;justify-content:center;padding:40px 16px 80px}
+    .wrap{width:100%;max-width:620px}
+
+    /* ── Header */
+    .header{display:flex;align-items:center;gap:16px;margin-bottom:36px}
+    .logo{width:52px;height:52px;border-radius:14px;overflow:hidden}
+    .logo img{width:100%;height:100%;object-fit:cover}
+    h1{font-size:24px;font-weight:800;letter-spacing:-.02em}
+    .subtitle{font-size:13px;color:var(--muted);margin-top:3px}
+
+    /* ── Section */
+    .section{background:var(--surface);border:1px solid var(--border);border-radius:14px;
+             padding:22px;margin-bottom:16px}
+    .section-title{font-size:11px;font-weight:700;text-transform:uppercase;
+                   letter-spacing:.1em;color:var(--muted);margin-bottom:18px}
+
+    label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}
+
+    input[type=text],input[type=password]{width:100%;background:var(--bg);
+      border:1px solid var(--border);border-radius:var(--r);color:var(--text);
+      padding:10px 13px;font-size:14px;outline:none;transition:border-color .15s}
+    input:focus{border-color:var(--accent)}
+
+    /* ── Toggle row */
+    .toggle-row{display:flex;justify-content:space-between;align-items:center;
+                padding:12px 0;border-bottom:1px solid var(--border)}
+    .toggle-row:last-child{border-bottom:none;padding-bottom:0}
+    .toggle-label{font-size:14px;font-weight:500}
+    .toggle-desc{font-size:12px;color:var(--muted);margin-top:2px}
+    input[type=checkbox]{width:38px;height:21px;appearance:none;background:var(--border);
+      border-radius:21px;cursor:pointer;position:relative;transition:background .2s;flex-shrink:0}
+    input[type=checkbox]::after{content:'';position:absolute;width:15px;height:15px;
+      background:#fff;border-radius:50%;top:3px;left:3px;transition:transform .2s}
+    input[type=checkbox]:checked{background:var(--accent)}
+    input[type=checkbox]:checked::after{transform:translateX(17px)}
+
+    /* ── Source item */
+    .source-item{background:var(--bg);border:1px solid var(--border);
+                 border-radius:var(--r);padding:14px;margin-bottom:10px}
+    .source-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+    .source-name{font-size:13px;font-weight:700;color:var(--accent2)}
+    .source-badge{font-size:11px;padding:2px 8px;border-radius:20px;
+                  background:rgba(123,104,238,.15);color:var(--accent2)}
+    .source-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    .source-grid .full{grid-column:1/-1}
+
+    /* ── Display format cards */
+    .format-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    .format-card{background:var(--bg);border:2px solid var(--border);border-radius:var(--r);
+                 padding:14px;cursor:pointer;transition:border-color .2s,background .2s}
+    .format-card:hover{border-color:var(--accent)}
+    .format-card.selected{border-color:var(--accent);background:rgba(123,104,238,.07)}
+    .format-tag{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;
+                color:var(--accent2);margin-bottom:8px}
+    .format-preview{font-size:12px;line-height:1.6;color:var(--muted);
+                    font-family:monospace;white-space:pre-line}
+    .format-preview em{color:var(--text);font-style:normal}
+
+    /* ── Buttons */
+    .btn{padding:10px 18px;border-radius:var(--r);border:none;cursor:pointer;
+         font-size:13px;font-weight:700;transition:opacity .15s;white-space:nowrap}
+    .btn:hover{opacity:.85}
+    .btn-primary{background:var(--accent);color:#fff}
+    .btn-ghost{background:var(--border);color:var(--text)}
+    .btn-danger{background:transparent;border:1px solid var(--border);color:var(--red);
+                font-size:12px;padding:6px 12px}
+    .btn-full{width:100%;padding:13px;margin-top:6px}
+
+    /* ── Install box */
+    .install-box{background:var(--bg);border:1px solid var(--accent);
+                 border-radius:var(--r);padding:16px;margin-top:16px;display:none}
+    .install-url{font-family:monospace;font-size:12px;color:var(--accent2);
+                 word-break:break-all;margin-bottom:14px}
+    .install-actions{display:flex;gap:8px;flex-wrap:wrap}
+    .btn-stremio{background:linear-gradient(135deg,#7b44e0,#7b68ee);color:#fff}
+
+    /* ── Status */
+    #status{padding:10px 14px;border-radius:var(--r);font-size:13px;
+            margin-top:10px;display:none}
+    #status.ok {background:rgba(93,187,126,.1);color:var(--green);display:block}
+    #status.err{background:rgba(224,108,117,.1);color:var(--red);display:block}
+
+    hr{border:none;border-top:1px solid var(--border);margin:6px 0 20px}
+    select{background:var(--bg);border:1px solid var(--border);border-radius:var(--r);
+           color:var(--text);padding:9px 12px;font-size:14px;outline:none;cursor:pointer}
+    select:focus{border-color:var(--accent)}
+  </style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="logo">
+      <img src="https://images.icon-icons.com/2552/PNG/512/tor_alpha_browser_logo_icon_152957.png" alt="Tor"/>
+    </div>
+    <div>
+      <h1>Tor</h1>
+      <div class="subtitle">Streams FR via AllDebrid · Torznab + Movix</div>
+    </div>
+  </div>
+
+  <!-- AllDebrid -->
+  <div class="section">
+    <div class="section-title">AllDebrid</div>
+    <label>Clé API AllDebrid</label>
+    <input type="password" id="ad-key" placeholder="Votre clé AllDebrid…" oninput="rebuild()"/>
+  </div>
+
+  <!-- Préférences -->
+  <div class="section">
+    <div class="section-title">Préférences</div>
+    <div class="toggle-row">
+      <div>
+        <div class="toggle-label">Movix (DDL)</div>
+        <div class="toggle-desc">Source DDL française – liens 1fichier via AllDebrid</div>
+      </div>
+      <input type="checkbox" id="enable-movix" checked onchange="rebuild()"/>
+    </div>
+    <div class="toggle-row">
+      <div><div class="toggle-label">Langue</div></div>
+      <select id="language" onchange="rebuild()" style="margin-left:auto">
+        <option value="fr">🇫🇷 Français</option>
+        <option value="en">🇬🇧 English</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- Sources Torznab -->
+  <div class="section">
+    <div class="section-title">Sources Torznab</div>
+    <div id="sources-list"></div>
+    <button class="btn btn-ghost" onclick="addCustomSource()" style="width:100%;margin-top:6px">
+      + Ajouter une source personnalisée
+    </button>
+  </div>
+
+  <!-- Format d'affichage -->
+  <div class="section">
+    <div class="section-title">Format d'affichage dans Stremio</div>
+    <div class="format-grid">
+      <div class="format-card selected" onclick="selectFormat('epure')" id="fmt-epure">
+        <div class="format-tag">✦ Épuré</div>
+        <div class="format-preview"><em>Tor</em>
+<em>Ygg</em>
+🔵 <em>2160p</em> | <em>BluRay REMUX</em>
+🌐 <em>FR EN</em> | <em>45.2 GB</em>
+<em>Film.Titre.2024.UHD…</em></div>
+      </div>
+      <div class="format-card" onclick="selectFormat('compact')" id="fmt-compact">
+        <div class="format-tag">◈ Compact</div>
+        <div class="format-preview"><em>2160p • BluRay REMUX • 45.2 GB</em>
+<em>Ygg</em> | <em>FR EN</em> | 👥 <em>42</em></div>
+      </div>
+    </div>
+    <input type="hidden" id="display-format" value="epure"/>
+  </div>
+
+  <!-- Générer -->
+  <div class="section">
+    <div class="section-title">Installation</div>
+    <div id="install-box" class="install-box">
+      <div class="install-url" id="install-url"></div>
+      <div class="install-actions">
+        <button class="btn btn-stremio" onclick="openInStremio()">📺 Installer dans Stremio</button>
+        <button class="btn btn-ghost"   onclick="copyUrl()">📋 Copier l'URL</button>
+      </div>
+    </div>
+    <div id="status"></div>
+    <button class="btn btn-primary btn-full" onclick="generate()">
+      Générer l'URL d'installation
+    </button>
+  </div>
+
+</div>
+
+<script>
+// ── Default sources ────────────────────────────────────────────────────────────
+const DEFAULT_SOURCES = [
+  { id:"ygg",      name:"Ygg",       url:"https://relay.ygg.gratis/torznab",                   apikey:"", fixed:true,  needsKey:false },
+  { id:"zilean",   name:"Zilean",    url:"https://zileanfortheleebs.midnightignite.me/torznab/api", apikey:"", fixed:true,  needsKey:false },
+  { id:"c411",     name:"C411",      url:"https://c411.org/api",                               apikey:"", fixed:true,  needsKey:true  },
+  { id:"torr9",    name:"Torr9",     url:"https://api.torr9.net/api/v1/torznab",               apikey:"", fixed:true,  needsKey:true  },
+  { id:"stremthru",name:"StremThru", url:"https://stremthru.133770001.xyz/v0/torznab/api",     apikey:"", fixed:true,  needsKey:false },
+];
+
+// Custom sources added by user
+let customSources = [];
+// Toggle state per default source
+let enabledDefaults = { ygg:true, zilean:true, c411:true, torr9:true, stremthru:true };
+let selectedFormat = "epure";
+let generatedUrl = "";
+
+// ── Init ───────────────────────────────────────────────────────────────────────
+renderSources();
+
+function selectFormat(fmt) {
+  selectedFormat = fmt;
+  document.getElementById("display-format").value = fmt;
+  document.getElementById("fmt-epure").classList.toggle("selected", fmt === "epure");
+  document.getElementById("fmt-compact").classList.toggle("selected", fmt === "compact");
+  rebuild();
+}
+
+// ── Render ─────────────────────────────────────────────────────────────────────
+function renderSources() {
+  const el = document.getElementById("sources-list");
+  let html = "";
+
+  // Fixed default sources
+  DEFAULT_SOURCES.forEach(s => {
+    const en = enabledDefaults[s.id];
+    html += `
+    <div class="source-item">
+      <div class="source-header">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span class="source-name">${s.name}</span>
+          <span class="source-badge">intégré</span>
+        </div>
+        <input type="checkbox" ${en ? "checked" : ""}
+               onchange="toggleDefault('${s.id}',this.checked)"/>
+      </div>
+      ${s.needsKey ? `
+        <label>Clé API</label>
+        <input type="text" id="key-${s.id}" value="${esc(s.apikey)}"
+               placeholder="Clé API obligatoire pour ${s.name}…"
+               oninput="updateDefaultKey('${s.id}',this.value)"/>
+      ` : `<div style="font-size:12px;color:var(--muted)">Pas de clé requise</div>`}
+    </div>`;
+  });
+
+  // Custom sources
+  customSources.forEach((s, i) => {
+    html += `
+    <div class="source-item">
+      <div class="source-header">
+        <span class="source-name">${s.name || "Source " + (i+1)}</span>
+        <button class="btn btn-danger" onclick="removeCustom(${i})">✕</button>
+      </div>
+      <div class="source-grid">
+        <div>
+          <label>Nom</label>
+          <input type="text" value="${esc(s.name)}" placeholder="Nom"
+                 oninput="updateCustom(${i},'name',this.value)"/>
+        </div>
+        <div>
+          <label>Clé API (optionnel)</label>
+          <input type="text" value="${esc(s.apikey)}" placeholder="Optionnel"
+                 oninput="updateCustom(${i},'apikey',this.value)"/>
+        </div>
+        <div class="full">
+          <label>URL Torznab</label>
+          <input type="text" value="${esc(s.url)}" placeholder="https://…/torznab"
+                 oninput="updateCustom(${i},'url',this.value)"/>
+        </div>
+      </div>
+    </div>`;
+  });
+
+  el.innerHTML = html;
+}
+
+function toggleDefault(id, checked) {
+  enabledDefaults[id] = checked;
+  rebuild();
+}
+
+function updateDefaultKey(id, val) {
+  const s = DEFAULT_SOURCES.find(s => s.id === id);
+  if (s) s.apikey = val;
+  rebuild();
+}
+
+function addCustomSource() {
+  customSources.push({ name:"", url:"", apikey:"" });
+  renderSources();
+  rebuild();
+}
+
+function removeCustom(i) {
+  customSources.splice(i, 1);
+  renderSources();
+  rebuild();
+}
+
+function updateCustom(i, field, val) {
+  customSources[i][field] = val;
+  rebuild();
+}
+
+function esc(s) { return (s||"").replace(/"/g,"&quot;"); }
+
+// ── Config encoding ────────────────────────────────────────────────────────────
+function getConfig() {
+  const tzSources = [];
+
+  DEFAULT_SOURCES.forEach(s => {
+    if (!enabledDefaults[s.id]) return;
+    const o = { name: s.name, url: s.url };
+    if (s.apikey) o.apikey = s.apikey;
+    tzSources.push(o);
+  });
+
+  customSources.forEach(s => {
+    if (!s.url.trim()) return;
+    const o = { name: s.name || s.url, url: s.url };
+    if (s.apikey) o.apikey = s.apikey;
+    tzSources.push(o);
+  });
+
+  return {
+    ak: document.getElementById("ad-key").value.trim(),
+    lg: document.getElementById("language").value,
+    mm: 75.0,
+    st: 5.0,
+    mx: document.getElementById("enable-movix").checked,
+    df: selectedFormat,
+    tz: tzSources,
+  };
+}
+
+function encodeConfig(cfg) {
+  const json = JSON.stringify(cfg);
+  return btoa(unescape(encodeURIComponent(json)))
+    .replace(/\+/g,"-").replace(/\//g,"_").replace(/=/g,"");
+}
+
+function rebuild() { if (generatedUrl) generate(); }
+
+// ── Generate ───────────────────────────────────────────────────────────────────
+function generate() {
+  const cfg    = getConfig();
+  const status = document.getElementById("status");
+
+  if (!cfg.ak) {
+    status.textContent = "⚠️ Clé AllDebrid manquante.";
+    status.className = "err";
+    document.getElementById("install-box").style.display = "none";
+    return;
+  }
+
+  const b64    = encodeConfig(cfg);
+  const origin = window.location.origin;
+  generatedUrl = `${origin}/${b64}/manifest.json`;
+
+  document.getElementById("install-url").textContent = generatedUrl;
+  document.getElementById("install-box").style.display = "block";
+  status.className = "";
+  status.style.display = "none";
+}
+
+function openInStremio() {
+  window.open(generatedUrl.replace(/^https?:\/\//, "stremio://"));
+}
+
+function copyUrl() {
+  navigator.clipboard.writeText(generatedUrl).then(() => {
+    const s = document.getElementById("status");
+    s.textContent = "✓ URL copiée !";
+    s.className = "ok";
+    setTimeout(() => { s.className=""; s.style.display="none"; }, 2000);
+  });
+}
+</script>
+</body>
+</html>

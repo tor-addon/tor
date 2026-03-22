@@ -1,0 +1,319 @@
+"""
+router.py
+─────────
+All Stremio addon routes + config page.
+
+Endpoints:
+  GET  /                              → redirect to /configure
+  GET  /configure                     → HTML config page
+  GET  /{config}/manifest.json        → addon manifest
+  GET  /{config}/stream/{type}/{id}   → stream list
+  GET  /{config}/playback/{token}     → 302 redirect to resolved URL
+
+Short-lived request dedup cache (TTL=15s):
+  Stremio fires the same stream request 2-3 times in quick succession.
+  We cache the pipeline result in memory for 15 s to avoid hammering AllDebrid.
+  The cache is per-process and never persisted.
+"""
+
+import asyncio
+import logging
+import time
+
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+
+from config import (
+    FORMAT_COMPACT,
+    FORMAT_EPURE,
+    UserConfig,
+    decode_playback_token,
+    encode_playback_token,
+)
+from settings import ADDON_DESCRIPTION, ADDON_ID, ADDON_LOGO, ADDON_NAME, ADDON_VERSION
+from stream_manager import StreamManager
+
+logger = logging.getLogger(__name__)
+router = APIRouter()
+
+# ── StreamManager pool ─────────────────────────────────────────────────────────
+# One StreamManager per unique config string – reuses persistent HTTP sessions.
+_managers: dict[str, StreamManager] = {}
+
+
+def _get_manager(config: UserConfig) -> StreamManager:
+    key = config.encode()
+    if key not in _managers:
+        _managers[key] = StreamManager(
+            alldebrid_api_key = config.alldebrid_key,
+            torznab_sources   = config.torznab_sources,
+            language          = config.language,
+            min_match         = config.min_match,
+            search_timeout    = config.search_timeout,
+            enable_movix      = config.enable_movix,
+        )
+    return _managers[key]
+
+
+# ── Short-lived dedup cache ─────────────────────────────────────────────────────
+# key: (b64_config, imdb_id, season, episode)
+# value: (timestamp_float, list[dict] streams)
+_CACHE_TTL = 15.0  # seconds
+_stream_cache: dict[tuple, tuple[float, list]] = {}
+
+
+def _cache_get(key: tuple) -> list | None:
+    entry = _stream_cache.get(key)
+    if entry and (time.monotonic() - entry[0]) < _CACHE_TTL:
+        return entry[1]
+    _stream_cache.pop(key, None)
+    return None
+
+
+def _cache_set(key: tuple, streams: list) -> None:
+    # Evict expired entries (keep memory clean)
+    now = time.monotonic()
+    expired = [k for k, (ts, _) in _stream_cache.items() if now - ts >= _CACHE_TTL]
+    for k in expired:
+        del _stream_cache[k]
+    _stream_cache[key] = (now, streams)
+
+
+# ── Routes ─────────────────────────────────────────────────────────────────────
+
+@router.get("/")
+async def root():
+    return RedirectResponse("/configure")
+
+
+@router.get("/configure", response_class=HTMLResponse)
+async def configure_page():
+    with open("static/configure.html", encoding="utf-8") as f:
+        return f.read()
+
+
+@router.get("/manifest.json")
+async def manifest_root():
+    return RedirectResponse("/configure")
+
+
+@router.get("/{b64_config}/manifest.json")
+async def manifest(b64_config: str):
+    return JSONResponse(_build_manifest(configured=True), headers=_cors())
+
+
+@router.get("/{b64_config}/stream/{media_type}/{stremio_id:path}")
+async def stream(request: Request, b64_config: str, media_type: str, stremio_id: str):
+    config = UserConfig.decode(b64_config)
+
+    if not config.is_valid():
+        return JSONResponse({"streams": []}, headers=_cors())
+
+    # Strip .json suffix Stremio appends
+    stremio_id = stremio_id.removesuffix(".json")
+
+    imdb_id = stremio_id
+    season  = None
+    episode = None
+
+    if ":" in stremio_id:
+        parts   = stremio_id.split(":")
+        imdb_id = parts[0]
+        try:
+            season  = int(parts[1])
+            episode = int(parts[2])
+        except (IndexError, ValueError):
+            pass
+
+    logger.info("stream  type=%s  id=%s  s=%s e=%s", media_type, imdb_id, season, episode)
+
+    # ── Short-lived dedup cache ────────────────────────────────────────────────
+    cache_key = (b64_config, imdb_id, season, episode)
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        logger.info("stream cache HIT for %s – skipping pipeline", imdb_id)
+        base_url = str(request.base_url).rstrip("/")
+        return JSONResponse(
+            {"streams": [_format_stream(s, b64_config, base_url, season, episode, config.display_format) for s in cached]},
+            headers=_cors(),
+        )
+
+    manager = _get_manager(config)
+
+    try:
+        streams = await manager.get_streams(imdb_id, season=season, episode=episode)
+    except Exception as exc:
+        logger.error("stream pipeline error: %s", exc, exc_info=True)
+        return JSONResponse({"streams": []}, headers=_cors())
+
+    if not streams:
+        return JSONResponse({"streams": []}, headers=_cors())
+
+    _cache_set(cache_key, streams)
+
+    base_url = str(request.base_url).rstrip("/")
+    stremio_streams = [
+        _format_stream(s, b64_config, base_url, season, episode, config.display_format)
+        for s in streams
+    ]
+
+    logger.info("stream: returning %d stream(s)", len(stremio_streams))
+    return JSONResponse({"streams": stremio_streams}, headers=_cors())
+
+
+@router.get("/{b64_config}/playback/{token}")
+async def playback(b64_config: str, token: str):
+    config = UserConfig.decode(b64_config)
+    if not config.is_valid():
+        raise HTTPException(status_code=400, detail="Invalid config")
+
+    try:
+        info = decode_playback_token(token)
+    except Exception as exc:
+        logger.error("playback: invalid token: %s", exc)
+        raise HTTPException(status_code=400, detail="Invalid token")
+
+    stream_type = info.get("t", "torrent")
+    infohash    = info.get("h", "")
+    season      = info.get("s")
+    episode     = info.get("e")
+    year        = info.get("y")
+
+    logger.info("playback  type=%s  hash=%s…  s=%s e=%s", stream_type, infohash[:12], season, episode)
+
+    manager = _get_manager(config)
+    stream_dict = {"stream_type": stream_type, "infohash": infohash}
+
+    try:
+        url = await manager.resolve_stream(stream_dict, season=season, episode=episode, year=year)
+    except Exception as exc:
+        logger.error("playback resolve error: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="Resolution failed")
+
+    if not url:
+        raise HTTPException(status_code=404, detail="Could not resolve stream")
+
+    logger.info("playback → %s…", url[:60])
+    return RedirectResponse(url, status_code=302, headers=_cors())
+
+
+# ── Helpers ────────────────────────────────────────────────────────────────────
+
+def _build_manifest(configured: bool = False) -> dict:
+    return {
+        "id":          ADDON_ID,
+        "version":     ADDON_VERSION,
+        "name":        ADDON_NAME,
+        "description": ADDON_DESCRIPTION,
+        "logo":        ADDON_LOGO,
+        "resources":   ["stream"],
+        "types":       ["movie", "series"],
+        "idPrefixes":  ["tt"],
+        "catalogs":    [],
+        "behaviorHints": {
+            "configurable":          True,
+            "configurationRequired": not configured,
+        },
+    }
+
+
+def _format_stream(
+    stream: dict,
+    b64_config: str,
+    base_url: str,
+    season: int | None,
+    episode: int | None,
+    display_format: str = FORMAT_EPURE,
+) -> dict:
+    stream_type = stream.get("stream_type", "torrent")
+    infohash    = stream.get("infohash", "")
+    year        = stream.get("year")
+
+    token = encode_playback_token(
+        stream_type=stream_type,
+        infohash=infohash,
+        season=season,
+        episode=episode,
+        year=year,
+    )
+
+    source       = stream.get("source", "?")
+    resolution   = stream.get("resolution") or "?"
+    quality      = stream.get("quality") or ""
+    size         = stream.get("size_fmt") or ""
+    langs        = stream.get("languages") or []
+    lang_str     = " ".join(l.upper() for l in langs) if langs else ""
+    torrent_name = stream.get("torrent_name") or stream.get("title") or ""
+    hdr          = stream.get("hdr") or []
+    audio        = stream.get("audio") or []
+
+    # HDR tags (skip plain SDR)
+    hdr_tags  = [h for h in hdr if h != "SDR"]
+    hdr_str   = " ".join(hdr_tags) if hdr_tags else ""
+
+    # Audio tags (first 2 max to keep it short)
+    audio_str = " ".join(audio[:2]) if audio else ""
+
+    # Colour dot: 🟣 DDL  |  🔵 Torrent
+    dot = "🟣" if stream_type == "ddl" else "🔵"
+
+    if display_format == FORMAT_EPURE:
+        # name (left column in Stremio):
+        #   Tor
+        #   {source}
+        name = f"Tor\n{source}"
+
+        # Line 1: 🔵/🟣 resolution | quality | HDR tags
+        line1_parts = [f"{dot} {resolution}"]
+        if quality:
+            line1_parts.append(quality)
+        if hdr_str:
+            line1_parts.append(hdr_str)
+        line1 = " | ".join(line1_parts)
+
+        # Line 2: 🌐 LANGS | size | audio tags
+        line2_parts = []
+        if lang_str:
+            line2_parts.append(f"🌐 {lang_str}")
+        if size:
+            line2_parts.append(size)
+        if audio_str:
+            line2_parts.append(audio_str)
+        line2 = " | ".join(line2_parts)
+
+        # Line 3: 🗂️ torrent name (truncated)
+        tn = torrent_name if len(torrent_name) <= 60 else torrent_name[:57] + "…"
+        line3 = f"🗂️ {tn}" if tn else ""
+
+        parts = [line1]
+        if line2:
+            parts.append(line2)
+        if line3:
+            parts.append(line3)
+
+        description = "\n".join(parts)
+
+    else:  # FORMAT_COMPACT
+        # name (left): quality only
+        name = quality or resolution
+
+        # description (right): resolution • size
+        right_parts = [p for p in [resolution, size] if p]
+        description = " • ".join(right_parts)
+
+    return {
+        "name":        name,
+        "description": description,
+        "url":         f"{base_url}/{b64_config}/playback/{token}",
+        "behaviorHints": {
+            "notWebReady": False,
+            "bingeGroup":  f"{ADDON_ID}-{resolution}",
+        },
+    }
+
+
+def _cors() -> dict:
+    return {
+        "Access-Control-Allow-Origin":  "*",
+        "Access-Control-Allow-Headers": "*",
+    }
