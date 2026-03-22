@@ -1,99 +1,89 @@
-# Author: adam
+"""
+services/torznab.py
+───────────────────
+Torznab client. Synchronous – call via asyncio.to_thread().
+"""
 
+import logging
+import xml.etree.ElementTree as ET
 
 import requests
-import xml.etree.ElementTree as ET
-import logging
 
-import pprint
+from settings import TORZNAB_RESULT_LIMIT
+
+logger = logging.getLogger(__name__)
+
+_NS = {"t": "http://torznab.com/schemas/2015/feed"}
+
 
 class Torznab:
-    NS = {'t': 'http://torznab.com/schemas/2015/feed'}
+    __slots__ = ("name", "url", "apikey", "session")
 
-    def __init__(self, name: str, url: str, apikey: str = None):
-        self.name = name
-        self.url = url
-        self.apikey = apikey
+    def __init__(self, name: str, url: str, apikey: str | None = None) -> None:
+        self.name    = name
+        self.url     = url
+        self.apikey  = apikey
         self.session = requests.Session()
 
-    def search(self, query: str = None, categories=None, **kwargs) -> list[dict]:
-        params = {'t': 'search', 'limit': 100}
-
+    def search(self, query: str, categories: list[int] | None = None, **kwargs) -> list[dict]:
+        params: dict = {"t": "search", "limit": TORZNAB_RESULT_LIMIT}
         if self.apikey:
-            params['apikey'] = self.apikey
-
+            params["apikey"] = self.apikey
         if query:
-            params['q'] = query
-
+            params["q"] = query
         if categories:
-            if isinstance(categories, list):
-                params['cat'] = ','.join(str(c) for c in categories)
-            else:
-                params['cat'] = str(categories)
-
+            params["cat"] = ",".join(str(c) for c in categories)
         params.update(kwargs)
 
+        logger.debug("Torznab │ [%s] q=%r", self.name, query)
         try:
-            response = self.session.get(self.url, params=params, timeout=10)
-            response.raise_for_status()
-            return self._parse(response.text)
-        except Exception as e:
-            logging.error(f"Torznab {self.name} search error: {e}")
+            r = self.session.get(self.url, params=params, timeout=5)
+            r.raise_for_status()
+        except Exception as exc:
+            logger.warning("Torznab │ [%s] request failed: %s", self.name, exc)
             return []
+
+        results = self._parse(r.text)
+        logger.info("Torznab │ [%s] %d result(s) for q=%r", self.name, len(results), query)
+        return results
 
     def _parse(self, xml_text: str) -> list[dict]:
         try:
             root = ET.fromstring(xml_text)
-        except ET.ParseError as e:
-            logging.error(f"Torznab {self.name} XML parsing error: {e}")
+        except ET.ParseError as exc:
+            logger.error("Torznab │ [%s] XML parse error: %s", self.name, exc)
             return []
 
-        results = []
+        results: list[dict] = []
         for item in root.findall(".//item"):
-            data = {
-                "title": item.findtext("title"),
-                "size": item.findtext("size"),
-                "category": item.findtext("category"),
-                "source": self.name,
-                "seeders": 0,
-                "infohash": None
+            guid = item.findtext("guid") or ""
+            entry: dict = {
+                "title":       item.findtext("title"),
+                "size":        item.findtext("size"),
+                "category":    item.findtext("category"),
+                "source":      self.name,
+                "stream_type": "torrent",
+                "seeders":     0,
+                "infohash":    None,
             }
 
-            # Extract specific Torznab attributes
-            for attr in item.findall("t:attr", self.NS):
+            for attr in item.findall("t:attr", _NS):
                 name = attr.get("name")
                 if name == "seeders":
-                    value = attr.get("value")
-                    data["seeders"] = int(value) if value and value.isdigit() else 0
+                    v = attr.get("value")
+                    entry["seeders"] = int(v) if v and v.isdigit() else 0
                 elif name == "infohash":
-                    data["infohash"] = attr.get("value")
+                    entry["infohash"] = attr.get("value")
 
-            # Fallback: Sometimes the infohash is embedded in a magnet URI inside the guid
-            if not data["infohash"] and data["guid"]:
-                guid_lower = data["guid"].lower()
-                if "btih:" in guid_lower:
-                    # Extract hash from urn:btih:HASH or magnet:?xt=urn:btih:HASH
-                    data["infohash"] = guid_lower.split("btih:")[-1].split("&")[0].upper()
+            if not entry["infohash"] and "btih:" in guid.lower():
+                entry["infohash"] = guid.lower().split("btih:")[-1].split("&")[0].upper()
 
-            # Optional: Ensure infohash is always uppercase for consistency in Stremio
-            if data["infohash"]:
-                data["infohash"] = data["infohash"].upper()
+            if entry["infohash"]:
+                entry["infohash"] = entry["infohash"].upper()
 
-            results.append(data)
+            results.append(entry)
 
         return results
 
-t = Torznab("Ygg", "https://relay.ygg.gratis/torznab")
-#t = Torznab("C411", "https://c411.org/api", "a3e9340aaf8e07987f64245ff50139bddb4098aebd17b0cd4c4685ac2ef3a85d")
-
-for torrent in t.search("Breaking Bad"):
-    pprint.pprint(torrent)
-
-
-
-
-
-
-
-
-
+    def close(self) -> None:
+        self.session.close()

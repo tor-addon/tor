@@ -1,132 +1,186 @@
+"""
+utils/filtering.py
+──────────────────
+Parses, enriches and validates raw stream dicts against TMDB metadata.
 
-from rapidfuzz import fuzz
-from PTT import parse_title
+Two validation paths:
+  - Torrent streams (stream_type == "torrent" or unset):
+      PTT parsing, title fuzzy match, year/season/episode checks.
+  - DDL streams (stream_type == "ddl", e.g. Movix):
+      Skip PTT + title match (Movix ID was already validated against TMDB/IMDB).
+      Only check language filter.
+"""
 
+import logging
+import re
 import unicodedata
 
-from pprint import pprint
+from PTT import parse_title
+from rapidfuzz import fuzz
+
+logger = logging.getLogger(__name__)
+
+_LANG_ALIASES: dict[str, str] = {
+    "french": "vff",
+    "French": "vff",
+    "FRENCH": "vff",
+    "VOF":    "vff",
+}
+
+_PUNCT_RE  = re.compile(r"[^a-z0-9\s]")
+_SPACES_RE = re.compile(r"\s+")
+
+
+def _clean(text: str) -> str:
+    """NFKD → ASCII → lowercase → strip punctuation → collapse spaces."""
+    t = unicodedata.normalize("NFKD", str(text)).encode("ascii", "ignore").decode("ascii")
+    t = t.lower()
+    t = _PUNCT_RE.sub(" ", t)
+    return _SPACES_RE.sub(" ", t).strip()
+
 
 class StreamFilter:
-    def __init__(self, tmdb_info: dict, min_match: float = 85.0, target_season: int = None,
-                 target_episode: int = None, target_language: str = None, remove_trash: bool = True):
+    __slots__ = (
+        "media_type", "tmdb_year", "min_match",
+        "target_season", "target_episode", "target_language",
+        "remove_trash", "_tmdb_titles",
+    )
 
-        self.media_type = tmdb_info.get("type")
-        self.tmdb_year = tmdb_info.get("year")
-        self.min_match = min_match
-        self.target_season = target_season
-        self.target_episode = target_episode
+    def __init__(
+        self,
+        tmdb_info: dict,
+        min_match: float = 85.0,
+        target_season: int | None = None,
+        target_episode: int | None = None,
+        target_language: str | None = None,
+        remove_trash: bool = True,
+    ) -> None:
+        self.media_type      = tmdb_info.get("type")
+        self.tmdb_year       = tmdb_info.get("year")
+        self.min_match       = min_match
+        self.target_season   = target_season
+        self.target_episode  = target_episode
         self.target_language = target_language.lower() if target_language else None
-        self.remove_trash = remove_trash
+        self.remove_trash    = remove_trash
 
-        self.tmdb_titles = [self._clean_string(t) for t in tmdb_info.get("titles", []) if t]
+        self._tmdb_titles: list[str] = [
+            _clean(t) for t in tmdb_info.get("titles", []) if t
+        ]
 
-    def _clean_string(self, text: str) -> str:
-        if not text:
-            return ""
-        return unicodedata.normalize('NFKD', str(text)).encode('ascii', 'ignore').decode('ascii').strip().lower()
+    # ─────────────────────────────────────────────────────────────────────────
 
-    def process_stream(self, raw_stream: dict) -> bool:
+    def is_valid(self, stream: dict) -> bool:
         """
-        Processes a stream IN-PLACE.
-        Adds 'valid' (bool) and 'invalid_reason' (str) directly to the dictionary.
-        Returns True if valid, False otherwise.
+        Validates and enriches a stream dict in-place.
+        Returns True if valid, False otherwise (sets 'invalid_reason').
         """
-        # Safely grab the title, falling back to torrent_name if 'title' is missing
-        raw_title = raw_stream.get("title") or raw_stream.get("torrent_name", "")
+        if stream.get("stream_type") == "ddl":
+            return self._validate_ddl(stream)
+        return self._validate_torrent(stream)
 
-        mod_title = raw_title.replace("french", "vff").replace("French", "vff").replace("FRENCH", "vff").replace('VOF', 'vff').replace('VOF', 'vff')
-        parsed_data = parse_title(mod_title, translate_languages=False)
+    # ─────────────────────────────────────────────────────────────────────────
+    # DDL path (Movix) – structured data, skip PTT + title match
+    # ─────────────────────────────────────────────────────────────────────────
 
-        # 1. Update dictionary in-place
-        raw_stream.update(parsed_data)
-        raw_stream["torrent_name"] = raw_title
+    def _validate_ddl(self, stream: dict) -> bool:
+        stream["valid"] = False
 
-        # We default to False. It saves us from writing it multiple times.
-        raw_stream["valid"] = False
-
-        # ---------------------------------------------------------
-        # 2. FAIL-FAST FILTERS
-        # ---------------------------------------------------------
-        if self.remove_trash and raw_stream.get("trash"):
-            raw_stream["invalid_reason"] = "Trash result"
-            return False
-
+        # Language is the only meaningful filter – title/year already validated
+        # at the Movix ID resolution step
         if self.target_language:
-            stream_langs = raw_stream.get("languages")
-            if not stream_langs or not any(str(lang).lower() == self.target_language for lang in stream_langs):
-                raw_stream["invalid_reason"] = "Language mismatch"
+            langs = stream.get("languages") or []
+            if self.target_language not in {str(l).lower() for l in langs}:
+                stream["invalid_reason"] = "Language"
                 return False
 
+        stream["valid"] = True
+        stream.pop("invalid_reason", None)
+        return True
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Torrent path – full PTT parsing + all checks
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _validate_torrent(self, stream: dict) -> bool:
+        stream["valid"] = False
+        raw_title = stream.get("title") or stream.get("torrent_name", "")
+
+        # Normalise French tokens before PTT
+        mod_title = raw_title
+        for src, dst in _LANG_ALIASES.items():
+            if src in raw_title:
+                mod_title = mod_title.replace(src, dst)
+
+        parsed = parse_title(mod_title, translate_languages=False)
+        stream.update(parsed)
+        stream["torrent_name"] = raw_title
+        stream["stream_type"]  = "torrent"
+
+        # ── 1. Trash ─────────────────────────────────────────────────────────
+        if self.remove_trash and stream.get("trash"):
+            stream["invalid_reason"] = "Trash"
+            return False
+
+        # ── 2. Language ──────────────────────────────────────────────────────
+        if self.target_language:
+            langs: list = stream.get("languages") or []
+            if self.target_language not in {str(l).lower() for l in langs}:
+                stream["invalid_reason"] = "Language"
+                return False
+
+        # ── 3a. Movie – year ─────────────────────────────────────────────────
         if self.media_type == "movie":
-            t_year = raw_stream.get("year")
+            t_year = stream.get("year")
             if self.tmdb_year and t_year:
                 try:
                     if abs(int(t_year) - int(self.tmdb_year)) > 1:
-                        raw_stream["invalid_reason"] = "Year mismatch"
+                        stream["invalid_reason"] = "Year"
                         return False
                 except ValueError:
                     pass
 
-        elif self.media_type == "series":
-            t_seasons = raw_stream.get("seasons", [])
-            t_complete = raw_stream.get("complete", False)
+        # ── 3b. Series – season / episode ────────────────────────────────────
+        elif self.media_type == "series" and self.target_season:
+            t_complete: bool = stream.get("complete", False)
+            t_seasons:  list = stream.get("seasons", [])
 
-            if self.target_season:
-                if self.target_season not in t_seasons and not t_complete:
-                    raw_stream["invalid_reason"] = "Season mismatch"
+            if not t_complete and self.target_season not in t_seasons:
+                stream["invalid_reason"] = "Season"
+                return False
+
+            t_episodes: list = stream.get("episodes", [])
+            if self.target_episode and t_episodes and not t_complete:
+                if self.target_episode not in t_episodes:
+                    stream["invalid_reason"] = "Episode"
                     return False
 
-                t_episodes = raw_stream.get("episodes", [])
-                if self.target_episode and t_episodes and not t_complete:
-                    if self.target_episode not in t_episodes:
-                        raw_stream["invalid_reason"] = "Episode mismatch"
-                        return False
+        # ── 4. Title fuzzy match (both PTT title and raw torrent name) ────────
+        parsed_title  = _clean(stream.get("title", ""))
+        torrent_clean = _clean(raw_title)
+        best: float   = 0.0
 
-        # ---------------------------------------------------------
-        # 3. STRICT TITLE MATCHING
-        # ---------------------------------------------------------
-        parsed_title = self._clean_string(raw_stream.get("title", ""))
-        best_score = 0.0
+        for tmdb_title in self._tmdb_titles:
+            for candidate in (parsed_title, torrent_clean):
+                score = fuzz.ratio(candidate, tmdb_title)
+                if score > best:
+                    best = score
+                    if best == 100.0:
+                        break
+            if best == 100.0:
+                break
 
-        for tmdb_title in self.tmdb_titles:
-            score = fuzz.ratio(parsed_title, tmdb_title)
-            if score > best_score:
-                best_score = score
-                if best_score == 100.0:
-                    break
-
-        #raw_stream["match_score"] = round(best_score, 2)
-
-        if best_score < self.min_match:
-            raw_stream["invalid_reason"] = f"Title match too low ({best_score}%)"
+        if best < self.min_match:
+            stream["invalid_reason"] = f"Title:{best:.0f}%"
             return False
 
-        # ---------------------------------------------------------
-        # 4. SIZE FORMATTING & SUCCESS
-        # ---------------------------------------------------------
+        # ── 5. Size formatting ───────────────────────────────────────────────
         try:
-            bytes_ = int(raw_stream.get("size", 0))
-            gb = bytes_ / (1 << 30)
-            raw_stream["size_fmt"] = f"{gb:.2f} GB" if gb >= 1 else f"{bytes_ / (1 << 20):.0f} MB"
+            b  = int(stream.get("size", 0))
+            gb = b / (1 << 30)
+            stream["size_fmt"] = f"{gb:.2f} GB" if gb >= 1 else f"{b / (1 << 20):.0f} MB"
         except (ValueError, TypeError):
-            raw_stream["size_fmt"] = str(raw_stream.get("size", ""))
+            stream["size_fmt"] = str(stream.get("size", ""))
 
-        # If it survived until here, it's valid!
-        raw_stream["valid"] = True
-        raw_stream.pop("invalid_reason", None)  # Clean up just in case
+        stream["valid"] = True
+        stream.pop("invalid_reason", None)
         return True
-
-tmdb_info = {'titles': ['Breaking Bad'], 'imdb_id': 'tt0903747', 'tmdb_id': '1396', 'type': 'tv', 'year': 2008}
-
-st = StreamFilter(tmdb_info, 75, target_season=3, target_episode=5, target_language='fr')
-
-stream = {'category': '5000',
- 'infohash': '23C0DED41635293F7CFE92776A9FA9EAEFBDA2E9',
- 'seeders': 3,
- 'size': '60327080245',
- 'source': 'Ygg',
- 'title': 'Breaking Bad S05 MULTI BluRay1080p x264 - Chris44'}
-
-st.process_stream(stream)
-
-pprint(stream)

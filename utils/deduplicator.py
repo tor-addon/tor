@@ -1,36 +1,43 @@
+"""
+utils/deduplicator.py
+─────────────────────
+Stateful deduplicator for a single get_streams() call.
+One instance per request – never shared across requests.
+"""
+
+import logging
+
+logger = logging.getLogger(__name__)
+
+
 class StreamDeduplicator:
-    def __init__(self):
-        self.seen_hashes = set()
+    __slots__ = ("_seen",)
 
-    def process_stream(self, stream: dict):
-        """
-        Updates the stream IN-PLACE.
-        Sets stream['valid'] to True or False and adds an 'invalid_reason' if needed.
-        """
-        stream['valid'] = False
+    def __init__(self) -> None:
+        self._seen: set[str] = set()
 
-        infohash = stream.get('infohash') or stream.get('hash')
+    def is_valid(self, stream: dict) -> bool:
+        """
+        Returns True and registers the hash if this torrent is new.
+        Sets stream['valid'] and 'invalid_reason' in-place.
+        """
+        infohash = stream.get("infohash") or stream.get("hash")
 
         if not infohash:
-            stream['invalid_reason'] = "Missing infohash"
-            return
+            stream["valid"] = False
+            stream["invalid_reason"] = "Missing infohash"
+            logger.debug("DEDUP  ✗ missing infohash – title=%s", stream.get("title"))
+            return False
 
-        normalized_hash = str(infohash).lower()
+        key = str(infohash).lower()
 
-        if normalized_hash in self.seen_hashes:
-            stream['invalid_reason'] = "Duplicate infohash"
-            return
+        if key in self._seen:
+            stream["valid"] = False
+            stream["invalid_reason"] = "Duplicate infohash"
+            logger.debug("DEDUP  ✗ duplicate – hash=%s", key)
+            return False
 
-        self.seen_hashes.add(normalized_hash)
-        stream['valid'] = True
-        stream.pop('invalid_reason', None)
-        return
-
-
-
-
-
-
-
-
-
+        self._seen.add(key)
+        stream["valid"] = True
+        stream.pop("invalid_reason", None)
+        return True

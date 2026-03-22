@@ -1,49 +1,84 @@
-# Author: adam
+"""
+utils/tmdb.py
+─────────────
+TMDB /find wrapper. Handles movies and TV series.
+Synchronous – call via asyncio.to_thread().
+"""
+
+import logging
+
 import requests
 
+from settings import TMDB_BASE_URL, TMDB_DEFAULT_KEY
+
+logger = logging.getLogger(__name__)
+
+
 class TMDBApi:
-    def __init__(self, apikey="eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiJlNTkxMmVmOWFhM2IxNzg2Zjk3ZTE1NWY1YmQ3ZjY1MSIsInN1YiI6IjY1M2NjNWUyZTg5NGE2MDBmZjE2N2FmYyIsInNjb3BlcyI6WyJhcGlfcmVhZCJdLCJ2ZXJzaW9uIjoxfQ.xrIXsMFJpI1o1j5g2QpQcFP1X3AfRjFA5FlBFO5Naw8"):
-        self.api ="https://api.themoviedb.org/3"
+    def __init__(self, apikey: str | None = None) -> None:
         self.session = requests.Session()
+        self.session.headers.update({
+            "Authorization": f"Bearer {apikey or TMDB_DEFAULT_KEY}",
+            "accept": "application/json",
+        })
 
-        self.headers = {
-            "Authorization": f"Bearer {apikey}",
-            "accept": "application/json"
+    def fetch_media_info(self, imdb_id: str) -> dict:
+        """
+        Returns:
+            {"titles": [...], "imdb_id": ..., "tmdb_id": ..., "type": "movie"|"series", "year": int}
+        Raises ValueError if no TMDB match.
+        """
+        try:
+            r = self.session.get(
+                f"{TMDB_BASE_URL}/find/{imdb_id}",
+                params={"external_source": "imdb_id", "language": "fr-FR"},
+                timeout=10,
+            )
+            r.raise_for_status()
+            data = r.json()
+        except Exception as exc:
+            logger.error("TMDB │ request failed for %s: %s", imdb_id, exc)
+            raise
+
+        if data.get("movie_results"):
+            item       = data["movie_results"][0]
+            title_fr   = item.get("title") or ""
+            title_orig = item.get("original_title") or ""
+            date_raw   = item.get("release_date", "")
+            media_type = "movie"
+
+        elif data.get("tv_results"):
+            item       = data["tv_results"][0]
+            title_fr   = item.get("name") or ""
+            title_orig = item.get("original_name") or ""
+            date_raw   = item.get("first_air_date", "")
+            media_type = "series"
+
+        else:
+            raise ValueError(f"No TMDB result for {imdb_id!r}")
+
+        titles: list[str] = [title_fr] if title_fr else []
+        if title_orig and title_orig != title_fr:
+            titles.append(title_orig)
+
+        year: int | None = None
+        try:
+            year = int(date_raw.split("-")[0]) if date_raw else None
+        except (ValueError, IndexError):
+            pass
+
+        result = {
+            "titles":   titles,
+            "imdb_id":  imdb_id,
+            "tmdb_id":  str(item.get("id", "")),
+            "type":     media_type,
+            "year":     year,
         }
+        logger.info(
+            "TMDB │ %s → type=%s  year=%s  titles=%s",
+            imdb_id, media_type, year, titles,
+        )
+        return result
 
-
-    def fetch_media_info(self, imdb_id):
-        url = self.api + f"/find/{imdb_id}?external_source=imdb_id&language=fr-FR"
-
-        r = requests.get(url, headers=self.headers)
-
-        print(r.json())
-        data = r.json()['movie_results'][0]
-
-        titles = [data.get('title')]
-        if data.get('original_title') != data.get('title'):
-            titles.append(data.get('original_title'))
-
-        tmdb_id = data.get('id')
-        type = data.get('media_type')
-
-        release_date = data.get("release_date", "")
-        year = int(release_date.split("-")[0]) if release_date else None
-
-        return {
-            "titles": titles,
-            "imdb_id": imdb_id,
-            "tmdb_id": str(tmdb_id),
-            "type": type,
-            "year": year
-        }
-
-        # {'titles': ['Breaking Bad'], 'imdb_id': 'tt0903747', 'tmdb_id': '1396', 'type': 'tv', 'year': 2008}
-
-
-api = TMDBApi()
-
-data = api.fetch_media_info("tt2527338")
-
-
-print(data)
+    def close(self) -> None:
+        self.session.close()
