@@ -32,10 +32,14 @@ class AllDebridClient:
     def check_cache(self, torrents: list[dict]) -> list[dict]:
         """
         Sets cached=True/False in-place.
-        DDL streams (stream_type=='ddl') are skipped – already cached=True.
+        DDL streams (stream_type=='ddl') and streams already marked cached=True
+        (e.g. Library) are skipped – they are treated as always available.
         Uncached torrents get rank=0.
         """
-        to_check = [t for t in torrents if t.get("stream_type") != "ddl"]
+        to_check = [
+            t for t in torrents
+            if t.get("stream_type") != "ddl" and not t.get("cached")
+        ]
         if not to_check:
             return torrents
 
@@ -76,30 +80,24 @@ class AllDebridClient:
             "AllDebrid │ resolve  hash=%s…  s=%s e=%s year=%s",
             info_hash[:12], season, episode, year,
         )
-        magnet_id: int | None = None
-        try:
-            magnet_id = self._upload_magnet(info_hash)
-            if magnet_id is None:
-                return None
+        magnet_id = self._upload_magnet(info_hash)
+        if magnet_id is None:
+            return None
 
-            raw_files = self._fetch_files(magnet_id)
-            if raw_files is None:
-                return None
+        raw_files = self._fetch_files(magnet_id)
+        if raw_files is None:
+            return None
 
-            flat = _flatten_tree(raw_files)
-            logger.debug("AllDebrid │ %d file(s) in torrent", len(flat))
+        flat = _flatten_tree(raw_files)
+        logger.debug("AllDebrid │ %d file(s) in torrent", len(flat))
 
-            best = find_best_file(flat, season=season, episode=episode, year=year)
-            if best is None:
-                logger.warning("AllDebrid │ no matching file found")
-                return None
+        best = find_best_file(flat, season=season, episode=episode, year=year)
+        if best is None:
+            logger.warning("AllDebrid │ no matching file found")
+            return None
 
-            logger.info("AllDebrid │ selected → %s (%.2f GB)", best["n"], best.get("s", 0) / 1e9)
-            return self._unlock(best["l"])
-        finally:
-            if magnet_id is not None:
-                pass
-                #self._delete_magnet(magnet_id)
+        logger.info("AllDebrid │ selected → %s (%.2f GB)", best["n"], best.get("s", 0) / 1e9)
+        return self._unlock(best["l"])
 
     # ─────────────────────────────────────────────────────────────────────────
     # DDL unlock
@@ -156,17 +154,6 @@ class AllDebridClient:
         url = body["data"]["link"]
         logger.info("AllDebrid │ unlocked → %s…", url[:60])
         return url
-
-    def _delete_magnet(self, magnet_id: int) -> None:
-        try:
-            self.session.post(
-                f"{ALLDEBRID_BASE_URL}/magnet/delete",
-                data={"ids[]": [magnet_id], "apikey": self.api_key, "agent": ALLDEBRID_AGENT},
-                timeout=10,
-            )
-            logger.debug("AllDebrid │ deleted magnet id=%s", magnet_id)
-        except Exception as exc:
-            logger.warning("AllDebrid │ delete failed id=%s: %s", magnet_id, exc)
 
     def _check_batch(self, batch: list[str], hash_map: dict[str, list[dict]]) -> None:
         payload = {"agent": ALLDEBRID_AGENT, "apikey": self.api_key, "magnets[]": batch}

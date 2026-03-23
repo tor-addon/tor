@@ -566,6 +566,34 @@
         </div>
       </div>
     </div>
+
+    <!-- Library AllDebrid -->
+    <div class="card">
+      <div class="card-inner">
+        <div class="source-card" id="library-card">
+          <div class="source-top">
+            <div class="src-dot" id="library-dot"></div>
+            <span class="src-name">Library</span>
+            <span class="tag tag-torrent">TORRENT</span>
+            <span class="tag tag-public" style="background:rgba(251,191,36,.08);color:#fbbf24;border-color:rgba(251,191,36,.2)">AllDebrid</span>
+            <input type="checkbox" class="switch" id="enable-library" onchange="syncLibrary();rebuild()"/>
+          </div>
+          <div class="source-body" id="body-library" style="display:none;padding:14px 16px;border-top:1px solid var(--border)">
+            <div style="font-size:12px;color:var(--text2);line-height:1.6">
+              Recherche parmi les magnets <strong style="color:var(--text)">Ready</strong> de votre librairie AllDebrid.<br>
+              Utile si vous avez ajouté un torrent manuellement.
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;padding-top:4px">
+              <div>
+                <div class="toggle-name" style="font-size:13px">Priorité librairie</div>
+                <div class="toggle-desc">Affiche les streams de votre librairie en premier</div>
+              </div>
+              <input type="checkbox" class="switch" id="library-priority" onchange="rebuild()"/>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- ── Filtres ────────────────────────────────────────────────────────────── -->
@@ -758,6 +786,8 @@ if (typeof PRELOAD_CONFIG !== "undefined") {
     if (c.mm) { document.getElementById("min-match").value = c.mm; document.getElementById("mm-val").textContent = c.mm+"%"; }
     if (c.mx === false) { document.getElementById("enable-movix").checked = false; syncMovix(); }
     if (c.mu) document.getElementById("movix-url").value = c.mu;
+    if (c.el) { document.getElementById("enable-library").checked = true; syncLibrary(); }
+    if (c.lp) document.getElementById("library-priority").checked = true;
     if (c.df) setFmt(c.df);
     if (c.tz) {
       const ids = new Set();
@@ -796,6 +826,18 @@ function syncMovix() {
   card.className = "source-card" + (on ? " enabled" : "");
   dot.style.background = on ? "var(--accent)" : "var(--text3)";
   dot.style.boxShadow  = on ? "0 0 6px var(--accent)" : "none";
+}
+
+// ── Library ────────────────────────────────────────────────────────────────────
+function syncLibrary() {
+  const on   = document.getElementById("enable-library").checked;
+  const card = document.getElementById("library-card");
+  const dot  = document.getElementById("library-dot");
+  const body = document.getElementById("body-library");
+  card.className = "source-card" + (on ? " enabled" : "");
+  dot.style.background = on ? "var(--accent)" : "var(--text3)";
+  dot.style.boxShadow  = on ? "0 0 6px var(--accent)" : "none";
+  body.style.display   = on ? "flex" : "none";
 }
 
 // ── Expand ─────────────────────────────────────────────────────────────────────
@@ -918,6 +960,8 @@ function getConfig() {
     mu: document.getElementById("movix-url").value.trim(),
     df: fmt,
     tz,
+    el: document.getElementById("enable-library").checked,
+    lp: document.getElementById("library-priority").checked,
   };
 }
 

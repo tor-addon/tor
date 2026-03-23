@@ -4,11 +4,11 @@ stream_manager.py
 Async orchestrator.
 
 Pipeline:
-  TMDB → [Torznab × N + Movix] (parallel) → Dedup → Filter → Rank
-       → AllDebrid cache (torrents only) → Sort
+  TMDB → [Torznab × N + Movix + Library] (parallel) → Dedup → Filter → Rank
+       → AllDebrid cache check (torrent-only, skips pre-cached Library streams) → Sort
 
 resolve_stream(stream, season, episode, year):
-  torrent → AllDebrid magnet
+  torrent → AllDebrid magnet  (works for both Torznab and Library hashes)
   ddl     → Movix decode → 1fichier → AllDebrid unlock
 """
 
@@ -19,12 +19,14 @@ from collections import defaultdict
 from typing import Optional
 
 from services.alldebrid import AllDebridClient
+from services.library import LibraryClient
 from services.movix import MovixClient
 from services.torznab import Torznab
 from utils.deduplicator import StreamDeduplicator
 from utils.filtering import StreamFilter
 from utils.tmdb import TMDBApi
 from utils import ranking
+from utils.ranking import LIBRARY_BONUS
 from settings import DEFAULT_LANGUAGE, DEFAULT_MIN_MATCH, DEFAULT_SEARCH_TIMEOUT
 
 logger = logging.getLogger(__name__)
@@ -40,23 +42,29 @@ class StreamManager:
         min_match: float = DEFAULT_MIN_MATCH,
         search_timeout: float = DEFAULT_SEARCH_TIMEOUT,
         enable_movix: bool = True,
+        movix_url: str = "",
+        enable_library: bool = False,
+        library_priority: bool = False,
     ) -> None:
-        self._language       = language
-        self._min_match      = min_match
-        self._search_timeout = search_timeout
-        self._enable_movix   = enable_movix
+        self._language        = language
+        self._min_match       = min_match
+        self._search_timeout  = search_timeout
+        self._enable_movix    = enable_movix
+        self._enable_library  = enable_library
+        self._library_priority = library_priority
 
         self._tmdb    = TMDBApi(tmdb_api_key)
         self._ad      = AllDebridClient(alldebrid_api_key)
-        self._movix   = MovixClient() if enable_movix else None
+        self._movix   = MovixClient(movix_url) if enable_movix else None
+        self._library = LibraryClient(alldebrid_api_key) if enable_library else None
         self._sources = [
             Torznab(s["name"], s["url"], s.get("apikey"))
             for s in torznab_sources
         ]
 
         logger.info(
-            "StreamManager │ ready – %d Torznab source(s)  movix=%s  lang=%s  min_match=%.0f",
-            len(self._sources), enable_movix, language, min_match,
+            "StreamManager │ ready – %d Torznab source(s)  movix=%s  library=%s  lang=%s  min_match=%.0f",
+            len(self._sources), enable_movix, enable_library, language, min_match,
         )
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -80,19 +88,22 @@ class StreamManager:
         is_serie = tmdb_info["type"] == "series"
 
         # 2. All sources in parallel
-        torznab_task = asyncio.create_task(self._search_torznab(imdb_id, tmdb_info["titles"]))
-        movix_task   = asyncio.create_task(
-            self._search_movix(imdb_id, tmdb_info, is_serie, season, episode)
-        ) if self._enable_movix else asyncio.create_task(_empty())
+        tasks = [
+            asyncio.create_task(self._search_torznab(imdb_id, tmdb_info["titles"])),
+            asyncio.create_task(
+                self._search_movix(imdb_id, tmdb_info, is_serie, season, episode)
+                if self._enable_movix else _empty()
+            ),
+            asyncio.create_task(
+                self._search_library() if self._enable_library else _empty()
+            ),
+        ]
+        torznab_results, movix_results, library_results = await asyncio.gather(*tasks)
 
-        torznab_results, movix_results = await asyncio.gather(torznab_task, movix_task)
-
-
-
-        raw = torznab_results + movix_results
+        raw = library_results + torznab_results + movix_results
         logger.info(
-            "[%s] raw: %d total  (torznab=%d  movix=%d)",
-            imdb_id, len(raw), len(torznab_results), len(movix_results),
+            "[%s] raw: %d total  (torznab=%d  movix=%d  library=%d)",
+            imdb_id, len(raw), len(torznab_results), len(movix_results), len(library_results),
         )
 
         if not raw:
@@ -125,6 +136,9 @@ class StreamManager:
                     bucket.append(detail)
                 continue
             ranking.rank(stream)
+            # Boost Library streams to top when library_priority is enabled
+            if self._library_priority and stream.get("source") == "Library":
+                stream["rank"] += LIBRARY_BONUS
             valid.append(stream)
 
         n_filter = len(raw) - n_dedup - len(valid)
@@ -145,7 +159,7 @@ class StreamManager:
         if not valid:
             return []
 
-        # 4. AllDebrid cache check (torrent only)
+        # 4. AllDebrid cache check (torrent only, skips pre-cached Library/DDL streams)
         await asyncio.to_thread(self._ad.check_cache, valid)
 
         cached = [s for s in valid if s.get("cached")]
@@ -184,7 +198,6 @@ class StreamManager:
             logger.error("StreamManager │ Movix disabled, cannot resolve DDL")
             return None
 
-        # id is encoded in infohash: "movix_{id}"
         try:
             stream_id = int(stream["infohash"].split("_", 1)[1])
         except (KeyError, IndexError, ValueError) as exc:
@@ -204,6 +217,8 @@ class StreamManager:
         self._ad.close()
         if self._movix:
             self._movix.close()
+        if self._library:
+            self._library.close()
         for s in self._sources:
             s.close()
         logger.info("StreamManager │ closed")
@@ -272,6 +287,21 @@ class StreamManager:
             return []
         except Exception as exc:
             logger.warning("Movix │ get_streams ERROR [%s]: %s", imdb_id, exc)
+            return []
+
+    async def _search_library(self) -> list[dict]:
+        if not self._library:
+            return []
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(self._library.get_streams),
+                timeout=self._search_timeout,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("Library │ get_streams TIMEOUT")
+            return []
+        except Exception as exc:
+            logger.warning("Library │ get_streams ERROR: %s", exc)
             return []
 
 

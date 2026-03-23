@@ -16,7 +16,6 @@ Short-lived request dedup cache (TTL=15s):
   The cache is per-process and never persisted.
 """
 
-import asyncio
 import logging
 import time
 from pathlib import Path
@@ -50,6 +49,9 @@ def _get_manager(config: UserConfig) -> StreamManager:
             min_match=config.min_match,
             search_timeout=config.search_timeout,
             enable_movix=config.enable_movix,
+            movix_url=config.movix_url,
+            enable_library=config.enable_library,
+            library_priority=config.library_priority,
         )
     return _managers[key]
 
@@ -293,10 +295,10 @@ def _format_stream(
         year=year,
     )
 
-    source       = stream.get("source", "?")
+    source       = stream.get("source", "?").replace('Library', '⚡️Library')
     resolution   = stream.get("resolution") or "?"
     quality      = stream.get("quality") or ""
-    size_fmt     = stream.get("size_fmt") or ""     # human-readable for display
+    size_fmt     = stream.get("size_fmt") or ""
     langs        = stream.get("languages") or []
     lang_str     = " ".join(l.upper() for l in langs) if langs else ""
     torrent_name = stream.get("torrent_name") or stream.get("title") or ""
@@ -354,7 +356,7 @@ def _format_stream(
         "bingeGroup":  f"{ADDON_ID}-{resolution}",
     }
 
-    if size_bytes and size_bytes > 0:
+    if size_bytes > 0:
         behavior_hints["videoSize"] = size_bytes
 
     if torrent_name:

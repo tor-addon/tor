@@ -9,6 +9,8 @@ Score hierarchy (gaps guarantee strict priority order):
     Size        × 50 pts/GB  → max ~15 000 for a 300 GB file  (never overrides quality gap)
     Seeders     capped at 50 pts  (true tie-breaker only, can't override size)
 
+    Library     +1 000 000 when library_priority is enabled (pins Library results to top)
+
 Correctness checks:
   • REMUX 2160p (900k) > BluRay 2160p (860k) regardless of size         ✓
   • BluRay 2160p 50 GB (862 500) > BluRay 2160p 6 GB (860 300+50)       ✓
@@ -39,9 +41,10 @@ _QUALITY: dict[str, int] = {
     "cam":         -500_000,
 }
 
-_PACK_BONUS   = 20_000   # series pack: between hdtv and web tier
-_SIZE_MULT    = 50       # pts per GB – 300 GB → 15 000, never overrides quality gap
-_SEEDERS_CAP  = 50       # caps seeder contribution so it can't override size
+_PACK_BONUS    = 20_000
+_SIZE_MULT     = 50
+_SEEDERS_CAP   = 50
+LIBRARY_BONUS  = 1_000_000   # applied by StreamManager when library_priority=True
 
 
 def rank(stream: dict) -> dict:
@@ -56,17 +59,14 @@ def rank(stream: dict) -> dict:
     if qual:
         score += _QUALITY.get(qual.lower(), 0)
 
-    # Pack bonus: explicit 'complete' flag OR season list with no episode list
     if stream.get("complete") or (stream.get("seasons") and not stream.get("episodes")):
         score += _PACK_BONUS
 
-    # Size: larger is better, capped impact to stay below quality tier gaps
     try:
         score += int(int(stream.get("size", 0)) / 1_073_741_824) * _SIZE_MULT
     except (ValueError, TypeError):
         pass
 
-    # Seeders: true micro tie-breaker, cannot override size
     score += min(int(stream.get("seeders", 0)), _SEEDERS_CAP)
 
     stream["rank"] = score

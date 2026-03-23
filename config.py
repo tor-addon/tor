@@ -19,15 +19,17 @@ FORMAT_COMPACT = "compact"
 
 @dataclass
 class UserConfig:
-    alldebrid_key:   str        = ""
-    language:        str        = DEFAULT_LANGUAGE
-    vostfr:          bool       = False     # accept VOSTFR in addition to VF
-    min_match:       float      = DEFAULT_MIN_MATCH
-    search_timeout:  float      = DEFAULT_SEARCH_TIMEOUT
-    enable_movix:    bool       = True
-    movix_url:       str        = ""        # overrides MOVIX_API_BASE_URL if set
-    display_format:  str        = FORMAT_EPURE
-    torznab_sources: list[dict] = field(default_factory=list)
+    alldebrid_key:    str        = ""
+    language:         str        = DEFAULT_LANGUAGE
+    vostfr:           bool       = False
+    min_match:        float      = DEFAULT_MIN_MATCH
+    search_timeout:   float      = DEFAULT_SEARCH_TIMEOUT
+    enable_movix:     bool       = True
+    movix_url:        str        = ""
+    display_format:   str        = FORMAT_EPURE
+    torznab_sources:  list[dict] = field(default_factory=list)
+    enable_library:   bool       = False   # search AllDebrid personal library
+    library_priority: bool       = False   # pin library results to top (+1 000 000 rank)
 
     def encode(self) -> str:
         payload = {
@@ -40,6 +42,8 @@ class UserConfig:
             "mu": self.movix_url,
             "df": self.display_format,
             "tz": self.torznab_sources,
+            "el": self.enable_library,
+            "lp": self.library_priority,
         }
         raw = json.dumps(payload, separators=(",", ":"))
         return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
@@ -51,15 +55,17 @@ class UserConfig:
             raw  = base64.urlsafe_b64decode(b64 + padding)
             data = json.loads(raw)
             return cls(
-                alldebrid_key   = data.get("ak", ""),
-                language        = data.get("lg", DEFAULT_LANGUAGE),
-                vostfr          = bool(data.get("vo", False)),
-                min_match       = float(data.get("mm", DEFAULT_MIN_MATCH)),
-                search_timeout  = float(data.get("st", DEFAULT_SEARCH_TIMEOUT)),
-                enable_movix    = bool(data.get("mx", True)),
-                movix_url       = data.get("mu", ""),
-                display_format  = data.get("df", FORMAT_EPURE),
-                torznab_sources = data.get("tz", []),
+                alldebrid_key    = data.get("ak", ""),
+                language         = data.get("lg", DEFAULT_LANGUAGE),
+                vostfr           = bool(data.get("vo", False)),
+                min_match        = float(data.get("mm", DEFAULT_MIN_MATCH)),
+                search_timeout   = float(data.get("st", DEFAULT_SEARCH_TIMEOUT)),
+                enable_movix     = bool(data.get("mx", True)),
+                movix_url        = data.get("mu", ""),
+                display_format   = data.get("df", FORMAT_EPURE),
+                torznab_sources  = data.get("tz", []),
+                enable_library   = bool(data.get("el", False)),
+                library_priority = bool(data.get("lp", False)),
             )
         except Exception as exc:
             logger.warning("Config decode error: %s – using defaults", exc)
