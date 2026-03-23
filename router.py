@@ -15,6 +15,9 @@ Short-lived request dedup cache (TTL=15s):
   We cache the pipeline result in memory for 15 s to avoid hammering AllDebrid.
   The cache is per-process and never persisted.
 """
+"""
+router.py  — fixed
+"""
 
 import asyncio
 import logging
@@ -37,8 +40,7 @@ from stream_manager import StreamManager
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# ── StreamManager pool ─────────────────────────────────────────────────────────
-# One StreamManager per unique config string – reuses persistent HTTP sessions.
+# ── StreamManager pool ──────────────────────────────────────────────────────────
 _managers: dict[str, StreamManager] = {}
 
 
@@ -46,20 +48,18 @@ def _get_manager(config: UserConfig) -> StreamManager:
     key = config.encode()
     if key not in _managers:
         _managers[key] = StreamManager(
-            alldebrid_api_key = config.alldebrid_key,
-            torznab_sources   = config.torznab_sources,
-            language          = config.language,
-            min_match         = config.min_match,
-            search_timeout    = config.search_timeout,
-            enable_movix      = config.enable_movix,
+            alldebrid_api_key=config.alldebrid_key,
+            torznab_sources=config.torznab_sources,
+            language=config.language,
+            min_match=config.min_match,
+            search_timeout=config.search_timeout,
+            enable_movix=config.enable_movix,
         )
     return _managers[key]
 
 
 # ── Short-lived dedup cache ─────────────────────────────────────────────────────
-# key: (b64_config, imdb_id, season, episode)
-# value: (timestamp_float, list[dict] streams)
-_CACHE_TTL = 15.0  # seconds
+_CACHE_TTL = 15.0
 _stream_cache: dict[tuple, tuple[float, list]] = {}
 
 
@@ -72,7 +72,6 @@ def _cache_get(key: tuple) -> list | None:
 
 
 def _cache_set(key: tuple, streams: list) -> None:
-    # Evict expired entries (keep memory clean)
     now = time.monotonic()
     expired = [k for k, (ts, _) in _stream_cache.items() if now - ts >= _CACHE_TTL]
     for k in expired:
@@ -80,7 +79,7 @@ def _cache_set(key: tuple, streams: list) -> None:
     _stream_cache[key] = (now, streams)
 
 
-# ── Routes ─────────────────────────────────────────────────────────────────────
+# ── Routes ──────────────────────────────────────────────────────────────────────
 
 @router.get("/")
 async def root():
@@ -95,10 +94,8 @@ async def configure_page():
 
 @router.get("/{b64_config}/configure", response_class=HTMLResponse)
 async def configure_preload(request: Request, b64_config: str):
-    """Config page pre-filled with current user config. Called by Stremio 'Configure' button."""
     static_path = Path(__file__).parent / "static" / "configure.html"
     html = static_path.read_text(encoding="utf-8")
-    # Inject the config so JS can decode and pre-fill the form
     html = html.replace(
         "// PRELOAD_CONFIG_PLACEHOLDER",
         f"const PRELOAD_CONFIG = {repr(b64_config)};",
@@ -114,7 +111,10 @@ async def manifest_root():
 @router.get("/{b64_config}/manifest.json")
 async def manifest(request: Request, b64_config: str):
     base_url = str(request.base_url).rstrip("/")
-    return JSONResponse(_build_manifest(configured=True, base_url=base_url, b64_config=b64_config), headers=_cors())
+    return JSONResponse(
+        _build_manifest(configured=True, base_url=base_url, b64_config=b64_config),
+        headers=_cors(),
+    )
 
 
 @router.get("/{b64_config}/stream/{media_type}/{stremio_id:path}")
@@ -124,32 +124,35 @@ async def stream(request: Request, b64_config: str, media_type: str, stremio_id:
     if not config.is_valid():
         return JSONResponse({"streams": []}, headers=_cors())
 
-    # Strip .json suffix Stremio appends
     stremio_id = stremio_id.removesuffix(".json")
 
     imdb_id = stremio_id
-    season  = None
+    season = None
     episode = None
 
     if ":" in stremio_id:
-        parts   = stremio_id.split(":")
+        parts = stremio_id.split(":")
         imdb_id = parts[0]
         try:
-            season  = int(parts[1])
+            season = int(parts[1])
             episode = int(parts[2])
         except (IndexError, ValueError):
             pass
 
     logger.info("stream  type=%s  id=%s  s=%s e=%s", media_type, imdb_id, season, episode)
 
-    # ── Short-lived dedup cache ────────────────────────────────────────────────
     cache_key = (b64_config, imdb_id, season, episode)
     cached = _cache_get(cache_key)
     if cached is not None:
         logger.info("stream cache HIT for %s – skipping pipeline", imdb_id)
         base_url = str(request.base_url).rstrip("/")
         return JSONResponse(
-            {"streams": [_format_stream(s, b64_config, base_url, season, episode, config.display_format) for s in cached]},
+            {
+                "streams": [
+                    _format_stream(s, b64_config, base_url, season, episode, config.display_format)
+                    for s in cached
+                ]
+            },
             headers=_cors(),
         )
 
@@ -177,7 +180,7 @@ async def stream(request: Request, b64_config: str, media_type: str, stremio_id:
 
 
 @router.get("/{b64_config}/playback/{token}")
-async def playback(b64_config: str, token: str):
+async def playback(b64_config: str, token: str, request: Request):
     config = UserConfig.decode(b64_config)
     if not config.is_valid():
         raise HTTPException(status_code=400, detail="Invalid config")
@@ -209,10 +212,22 @@ async def playback(b64_config: str, token: str):
         raise HTTPException(status_code=404, detail="Could not resolve stream")
 
     logger.info("playback → %s…", url[:60])
-    return RedirectResponse(url, status_code=302, headers=_cors())
+
+    # FIX #2 — 307 instead of 302.
+    # RFC 7231: 307 guarantees the client re-sends the request with the EXACT
+    # same method AND headers (including Range:) on redirect.
+    # With 302 some HTTP clients (ExoPlayer on Android TV) drop the Range header,
+    # which causes the Matroska EBML parser to fail seeking large files:
+    #   "No valid varint length mask found [2000]"
+    headers = {
+        **_cors(),
+        "Accept-Ranges": "bytes",           # tells ExoPlayer range requests are welcome
+        "Cache-Control": "no-store",        # never cache a signed debrid redirect URL
+    }
+    return RedirectResponse(url, status_code=307, headers=headers)
 
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
+# ── Helpers ─────────────────────────────────────────────────────────────────────
 
 def _build_manifest(configured: bool = False, base_url: str = "", b64_config: str = "") -> dict:
     manifest = {
@@ -230,7 +245,6 @@ def _build_manifest(configured: bool = False, base_url: str = "", b64_config: st
             "configurationRequired": not configured,
         },
     }
-    # Stremio uses configureUrl to show a "Configure" button for installed addons
     if configured and base_url and b64_config:
         manifest["behaviorHints"]["configureUrl"] = f"{base_url}/{b64_config}/configure"
     return manifest
@@ -259,30 +273,27 @@ def _format_stream(
     source       = stream.get("source", "?")
     resolution   = stream.get("resolution") or "?"
     quality      = stream.get("quality") or ""
-    size         = stream.get("size_fmt") or ""
+    size_fmt     = stream.get("size_fmt") or ""     # human-readable for display
     langs        = stream.get("languages") or []
     lang_str     = " ".join(l.upper() for l in langs) if langs else ""
     torrent_name = stream.get("torrent_name") or stream.get("title") or ""
     hdr          = stream.get("hdr") or []
     audio        = stream.get("audio") or []
 
-    # HDR tags (skip plain SDR)
+    try:
+        size_bytes = int(stream.get("size") or 0)
+    except (ValueError, TypeError):
+        size_bytes = 0
+
     hdr_tags  = [h for h in hdr if h != "SDR"]
     hdr_str   = " ".join(hdr_tags) if hdr_tags else ""
-
-    # Audio tags (first 2 max to keep it short)
     audio_str = " ".join(audio[:2]) if audio else ""
 
-    # Colour dot: 🟣 DDL  |  🔵 Torrent
     dot = "🟣" if stream_type == "ddl" else "🔵"
 
     if display_format == FORMAT_EPURE:
-        # name (left column in Stremio):
-        #   Tor
-        #   {source}
         name = f"Tor\n{source}"
 
-        # Line 1: 🔵/🟣 resolution | quality | HDR tags
         line1_parts = [f"{dot} {resolution}"]
         if quality:
             line1_parts.append(quality)
@@ -290,17 +301,15 @@ def _format_stream(
             line1_parts.append(hdr_str)
         line1 = " | ".join(line1_parts)
 
-        # Line 2: 🌐 LANGS | size | audio tags
         line2_parts = []
         if lang_str:
             line2_parts.append(f"🌐 {lang_str}")
-        if size:
-            line2_parts.append(size)
+        if size_fmt:
+            line2_parts.append(size_fmt)
         if audio_str:
             line2_parts.append(audio_str)
         line2 = " | ".join(line2_parts)
 
-        # Line 3: 🗂️ torrent name (truncated)
         tn = torrent_name if len(torrent_name) <= 60 else torrent_name[:57] + "…"
         line3 = f"🗂️ {tn}" if tn else ""
 
@@ -313,26 +322,40 @@ def _format_stream(
         description = "\n".join(parts)
 
     else:  # FORMAT_COMPACT
-        # name (left): quality only
         name = quality or resolution
-
-        # description (right): resolution • size
-        right_parts = [p for p in [resolution, size] if p]
+        right_parts = [p for p in [resolution, size_fmt] if p]
         description = " • ".join(right_parts)
 
+    # ── FIX #1 — behaviorHints: ALL fields must live INSIDE behaviorHints ────
+    # The Stremio spec (stremio-addon-sdk/docs/api/responses/stream.md) is
+    # explicit: videoSize, filename, notWebReady belong inside behaviorHints.
+    # Putting them at the top level of the stream object is silently ignored by
+    # Android TV / ExoPlayer, so it never knew the file size and couldn't
+    # pre-allocate the correct read buffer → EBML seek crash on large files.
+    behavior_hints: dict = {
+        "notWebReady": True,                        # MKV over HTTP, not a web-ready MP4
+        "bingeGroup":  f"{ADDON_ID}-{resolution}",
+    }
+
+    # Only include videoSize if we actually know it — sending 0 is worse than
+    # omitting the field (ExoPlayer allocates a 0-byte buffer and fails).
+    if size_bytes and size_bytes > 0:
+        behavior_hints["videoSize"] = size_bytes
+
+    # filename helps ExoPlayer detect the container (MKV) and pick the right
+    # demuxer before the first byte arrives.
+    if torrent_name:
+        # Ensure it ends in .mkv so ExoPlayer's container sniffer doesn't
+        # have to probe the stream header (which can fail mid-seek on large files).
+        fname = torrent_name if torrent_name.lower().endswith(".mkv") else torrent_name + ".mkv"
+        behavior_hints["filename"] = fname
+
     return {
-            "name":        name,
-            "description": description,
-            "url":         f"{base_url}/{b64_config}/playback/{token}",
-            # ── Ces 3 champs sont critiques pour Android TV ──
-            "notWebReady": True,                                    # MKV ≠ MP4
-            "filename":    stream.get("torrent_name", "") + ".mkv", # ExoPlayer détecte le container
-            "videoSize":   stream.get("size", 0),                   # aide le player à allouer le buffer
-            "behaviorHints": {
-                "notWebReady": True,                                # redondant mais certains clients lisent ici
-                "bingeGroup":  f"{ADDON_ID}-{resolution}",
-            },
-        }
+        "name":          name,
+        "description":   description,
+        "url":           f"{base_url}/{b64_config}/playback/{token}",
+        "behaviorHints": behavior_hints,
+    }
 
 
 def _cors() -> dict:
