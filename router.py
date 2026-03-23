@@ -8,15 +8,12 @@ Endpoints:
   GET  /configure                     → HTML config page
   GET  /{config}/manifest.json        → addon manifest
   GET  /{config}/stream/{type}/{id}   → stream list
-  GET  /{config}/playback/{token}     → 302 redirect to resolved URL
+  GET  /{config}/playback/{token}     → 307 redirect to resolved URL
 
 Short-lived request dedup cache (TTL=15s):
   Stremio fires the same stream request 2-3 times in quick succession.
   We cache the pipeline result in memory for 15 s to avoid hammering AllDebrid.
   The cache is per-process and never persisted.
-"""
-"""
-router.py  — fixed
 """
 
 import asyncio
@@ -43,7 +40,6 @@ router = APIRouter()
 # ── StreamManager pool ──────────────────────────────────────────────────────────
 _managers: dict[str, StreamManager] = {}
 
-
 def _get_manager(config: UserConfig) -> StreamManager:
     key = config.encode()
     if key not in _managers:
@@ -58,10 +54,9 @@ def _get_manager(config: UserConfig) -> StreamManager:
     return _managers[key]
 
 
-# ── Short-lived dedup cache ─────────────────────────────────────────────────────
+# ── Short-lived dedup cache (Streams) ───────────────────────────────────────────
 _CACHE_TTL = 15.0
 _stream_cache: dict[tuple, tuple[float, list]] = {}
-
 
 def _cache_get(key: tuple) -> list | None:
     entry = _stream_cache.get(key)
@@ -70,13 +65,33 @@ def _cache_get(key: tuple) -> list | None:
     _stream_cache.pop(key, None)
     return None
 
-
 def _cache_set(key: tuple, streams: list) -> None:
     now = time.monotonic()
     expired = [k for k, (ts, _) in _stream_cache.items() if now - ts >= _CACHE_TTL]
     for k in expired:
         del _stream_cache[k]
     _stream_cache[key] = (now, streams)
+
+
+# ── Resolved-URL cache (Playback) ───────────────────────────────────────────────
+# Evite de re-résoudre pour chaque range request d'ExoPlayer.
+# ExoPlayer sur Android TV frappe le même token 3-5x en quelques secondes.
+_RESOLVED_URL_TTL = 45.0  # secondes — au-delà, on re-résout
+_resolved_url_cache: dict[str, tuple[float, str]] = {}
+
+def _resolved_cache_get(token: str) -> str | None:
+    entry = _resolved_url_cache.get(token)
+    if entry and (time.monotonic() - entry[0]) < _RESOLVED_URL_TTL:
+        return entry[1]
+    _resolved_url_cache.pop(token, None)
+    return None
+
+def _resolved_cache_set(token: str, url: str) -> None:
+    now = time.monotonic()
+    expired = [k for k, (ts, _) in _resolved_url_cache.items() if now - ts >= _RESOLVED_URL_TTL]
+    for k in expired:
+        del _resolved_url_cache[k]
+    _resolved_url_cache[token] = (now, url)
 
 
 # ── Routes ──────────────────────────────────────────────────────────────────────
@@ -191,6 +206,17 @@ async def playback(b64_config: str, token: str, request: Request):
         logger.error("playback: invalid token: %s", exc)
         raise HTTPException(status_code=400, detail="Invalid token")
 
+    # ── Cache hit : même token → même URL → ExoPlayer ne se perd pas ──────────
+    cache_key = f"{b64_config}:{token}"
+    cached_url = _resolved_cache_get(cache_key)
+    if cached_url:
+        logger.info("playback cache HIT → %s…", cached_url[:60])
+        return RedirectResponse(
+            cached_url,
+            status_code=307,
+            headers={**_cors(), "Accept-Ranges": "bytes", "Cache-Control": "no-store"},
+        )
+
     stream_type = info.get("t", "torrent")
     infohash    = info.get("h", "")
     season      = info.get("s")
@@ -211,20 +237,17 @@ async def playback(b64_config: str, token: str, request: Request):
     if not url:
         raise HTTPException(status_code=404, detail="Could not resolve stream")
 
+    # ── Mise en cache avant redirect ───────────────────────────────────────────
+    _resolved_cache_set(cache_key, url)
+
     logger.info("playback → %s…", url[:60])
 
-    # FIX #2 — 307 instead of 302.
-    # RFC 7231: 307 guarantees the client re-sends the request with the EXACT
-    # same method AND headers (including Range:) on redirect.
-    # With 302 some HTTP clients (ExoPlayer on Android TV) drop the Range header,
-    # which causes the Matroska EBML parser to fail seeking large files:
-    #   "No valid varint length mask found [2000]"
-    headers = {
-        **_cors(),
-        "Accept-Ranges": "bytes",           # tells ExoPlayer range requests are welcome
-        "Cache-Control": "no-store",        # never cache a signed debrid redirect URL
-    }
-    return RedirectResponse(url, status_code=307, headers=headers)
+    # 307 au lieu de 302 pour forcer le client à conserver les headers d'origine (Range)
+    return RedirectResponse(
+        url,
+        status_code=307,
+        headers={**_cors(), "Accept-Ranges": "bytes", "Cache-Control": "no-store"},
+    )
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────────
@@ -326,27 +349,15 @@ def _format_stream(
         right_parts = [p for p in [resolution, size_fmt] if p]
         description = " • ".join(right_parts)
 
-    # ── FIX #1 — behaviorHints: ALL fields must live INSIDE behaviorHints ────
-    # The Stremio spec (stremio-addon-sdk/docs/api/responses/stream.md) is
-    # explicit: videoSize, filename, notWebReady belong inside behaviorHints.
-    # Putting them at the top level of the stream object is silently ignored by
-    # Android TV / ExoPlayer, so it never knew the file size and couldn't
-    # pre-allocate the correct read buffer → EBML seek crash on large files.
     behavior_hints: dict = {
-        "notWebReady": True,                        # MKV over HTTP, not a web-ready MP4
+        "notWebReady": True,
         "bingeGroup":  f"{ADDON_ID}-{resolution}",
     }
 
-    # Only include videoSize if we actually know it — sending 0 is worse than
-    # omitting the field (ExoPlayer allocates a 0-byte buffer and fails).
     if size_bytes and size_bytes > 0:
         behavior_hints["videoSize"] = size_bytes
 
-    # filename helps ExoPlayer detect the container (MKV) and pick the right
-    # demuxer before the first byte arrives.
     if torrent_name:
-        # Ensure it ends in .mkv so ExoPlayer's container sniffer doesn't
-        # have to probe the stream header (which can fail mid-seek on large files).
         fname = torrent_name if torrent_name.lower().endswith(".mkv") else torrent_name + ".mkv"
         behavior_hints["filename"] = fname
 
@@ -356,7 +367,6 @@ def _format_stream(
         "url":           f"{base_url}/{b64_config}/playback/{token}",
         "behaviorHints": behavior_hints,
     }
-
 
 def _cors() -> dict:
     return {
