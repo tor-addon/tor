@@ -5,17 +5,17 @@ Score hierarchy (gaps guarantee strict priority order):
 
     Resolution  800 000 / 400 000 / 200 000 / 100 000
     Quality     100 000 (remux) → 60 000 (bluray) → 40 000 (web) → 20 000 (hdtv) → −500 000 (cam)
-    Pack        20 000   ← series packs sit between hdtv and web, always beats bare episode
-    Size        × 50 pts/GB  → max ~15 000 for a 300 GB file  (never overrides quality gap)
-    Seeders     capped at 50 pts  (true tie-breaker only, can't override size)
+    Pack        20 000   ← series packs between hdtv and web, always beats bare episode
+    Size        × 50 pts/GiB  → max ~15 000 for a 300 GiB file  (never overrides quality gap)
+    Seeders     capped at 50 pts  (micro tie-breaker only)
 
-    Library     +1 000 000 when library_priority is enabled (pins Library results to top)
+    Library     +1 000 000 when library_priority=True (pins Library results to top)
 
-Correctness checks:
+Correctness:
   • REMUX 2160p (900k) > BluRay 2160p (860k) regardless of size         ✓
-  • BluRay 2160p 50 GB (862 500) > BluRay 2160p 6 GB (860 300+50)       ✓
+  • BluRay 2160p 50 GB (862 500) > BluRay 2160p 6 GB (860 300)          ✓
   • BluRay 2160p (860k) > BluRay 1080p REMUX (500k)                     ✓
-  • 300 GB WEBRip (40k+15k=55k) never beats a BluRay (60k) in same res  ✓
+  • 300 GB WEBRip (55k) never beats a BluRay (60k) in same resolution   ✓
 """
 
 import logging
@@ -41,10 +41,10 @@ _QUALITY: dict[str, int] = {
     "cam":         -500_000,
 }
 
-_PACK_BONUS    = 20_000
-_SIZE_MULT     = 50
-_SEEDERS_CAP   = 50
-LIBRARY_BONUS  = 1_000_000   # applied by StreamManager when library_priority=True
+_PACK_BONUS   = 20_000
+_SIZE_MULT    = 50      # pts per GiB – max ~15 000 for 300 GiB
+_SEEDERS_CAP  = 50
+LIBRARY_BONUS = 1_000_000
 
 
 def rank(stream: dict) -> dict:
@@ -59,15 +59,17 @@ def rank(stream: dict) -> dict:
     if qual:
         score += _QUALITY.get(qual.lower(), 0)
 
+    # Pack bonus: complete flag OR season pack (seasons set, no specific episode)
     if stream.get("complete") or (stream.get("seasons") and not stream.get("episodes")):
         score += _PACK_BONUS
 
+    # Size: bitshift >> 30 is integer GiB division, faster than / 1_073_741_824
     try:
-        score += int(int(stream.get("size", 0)) / 1_073_741_824) * _SIZE_MULT
+        score += (int(stream.get("size") or 0) >> 30) * _SIZE_MULT
     except (ValueError, TypeError):
         pass
 
-    score += min(int(stream.get("seeders", 0)), _SEEDERS_CAP)
+    score += min(int(stream.get("seeders") or 0), _SEEDERS_CAP)
 
     stream["rank"] = score
     logger.debug(
@@ -75,12 +77,12 @@ def rank(stream: dict) -> dict:
         score,
         stream.get("resolution", "?"),
         stream.get("quality", "?"),
-        stream.get("torrent_name", "?")[:60],
+        (stream.get("torrent_name") or "?")[:60],
     )
     return stream
 
 
 def sort_streams(streams: list[dict]) -> list[dict]:
-    """Sorts in-place by 'rank' descending. Returns the same list."""
+    """Sorts in-place by rank descending. Returns the same list."""
     streams.sort(key=lambda s: s["rank"], reverse=True)
     return streams

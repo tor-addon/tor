@@ -1,6 +1,3 @@
-# Author: adam
-
-
 """
 services/library.py
 ───────────────────
@@ -11,32 +8,42 @@ Fetches all Ready magnets from the user's AllDebrid library (v4.1 API).
 Each magnet is converted to a pipeline-compatible stream dict (stream_type=torrent,
 cached=True) so it passes through the normal Filter → Rank pipeline.
 
+Results are cached for 15 s (TTL) to match the stream pipeline dedup window.
 Resolution works identically to a regular torrent: infohash → resolve_stream().
 """
 
 import logging
+import time
 
 import requests
 
-from settings import ALLDEBRID_AGENT, ALLDEBRID_V41_BASE_URL
+from settings import ALLDEBRID_V41_BASE_URL
 
 logger = logging.getLogger(__name__)
 
 _READY_STATUS = "Ready"
+_CACHE_TTL    = 15.0   # seconds – mirrors the stream pipeline dedup cache
 
 
 class LibraryClient:
-    __slots__ = ("api_key", "session")
+    __slots__ = ("api_key", "session", "_cache", "_cache_ts")
 
     def __init__(self, api_key: str) -> None:
-        self.api_key = api_key
-        self.session = requests.Session()
+        self.api_key   = api_key
+        self.session   = requests.Session()
+        self._cache:    list[dict] | None = None
+        self._cache_ts: float             = 0.0
 
     def get_streams(self) -> list[dict]:
         """
-        Returns pipeline-compatible stream dicts for all Ready magnets in the library.
-        Up to ~7 000 entries per AllDebrid docs; typically <1 000.
+        Returns pipeline-compatible stream dicts for all Ready magnets.
+        Results are cached for 15 s (same window as the stream pipeline).
         """
+        now = time.monotonic()
+        if self._cache is not None and (now - self._cache_ts) < _CACHE_TTL:
+            logger.info("Library │ cache HIT (%d streams)", len(self._cache))
+            return self._cache
+
         try:
             r = self.session.post(
                 f"{ALLDEBRID_V41_BASE_URL}/magnet/status",
@@ -47,19 +54,24 @@ class LibraryClient:
             body = r.json()
         except Exception as exc:
             logger.error("Library │ request failed: %s", exc)
-            return []
+            return self._cache or []   # stale cache is better than nothing
 
         if body.get("status") != "success":
             logger.warning("Library │ API error: %s", body.get("error", {}))
-            return []
+            return self._cache or []
 
         magnets = body.get("data", {}).get("magnets") or []
         streams = [self._to_stream(m) for m in magnets if m.get("status") == _READY_STATUS]
 
         logger.info("Library │ %d Ready magnet(s) out of %d", len(streams), len(magnets))
+        self._cache    = streams
+        self._cache_ts = now
         return streams
 
-    # ─────────────────────────────────────────────────────────────────────────
+    def invalidate_cache(self) -> None:
+        """Force next call to re-fetch (e.g. after the user uploads a new magnet)."""
+        self._cache    = None
+        self._cache_ts = 0.0
 
     @staticmethod
     def _to_stream(magnet: dict) -> dict:
@@ -76,13 +88,11 @@ class LibraryClient:
         size_fmt = f"{gb:.2f} GB" if gb >= 1 else f"{size / (1 << 20):.0f} MB"
 
         return {
-            # Identity – PTT will enrich title/resolution/quality/languages in filtering
             "title":        filename,
             "torrent_name": filename,
             "infohash":     h.upper(),
             "source":       "Library",
             "stream_type":  "torrent",
-            # Pre-marked cached: skip AllDebrid cache re-check
             "cached":       True,
             "seeders":      0,
             "size":         size,

@@ -477,11 +477,24 @@
     .g2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
     .full { grid-column: 1 / -1; }
     .gap12 { display: flex; flex-direction: column; gap: 12px; }
+    /* ─── Language pills ───────────────────────────────────────────────────── */
+    .lang-pills { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+    .lang-pill {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 6px 12px; border-radius: 8px; cursor: pointer;
+      font-size: 13px; font-weight: 600; user-select: none;
+      border: 1px solid var(--border2); color: var(--text2);
+      background: var(--bg); transition: all .15s;
+    }
+    .lang-pill.active {
+      background: var(--accent-dim); color: var(--accent);
+      border-color: rgba(108,99,255,.35);
+    }
+    .lang-pill input { display: none; }
   </style>
 </head>
 <body>
 
-<!-- Top nav -->
 <nav class="topnav">
   <div class="nav-brand">
     <div class="nav-logo"><img src="https://images.icon-icons.com/2552/PNG/512/tor_alpha_browser_logo_icon_152957.png"/></div>
@@ -496,7 +509,6 @@
 
 <div class="page-wrap">
 
-  <!-- ── AllDebrid ─────────────────────────────────────────────────────────── -->
   <div class="section" id="alldebrid">
     <div class="section-head">
       <div>
@@ -523,7 +535,6 @@
     </div>
   </div>
 
-  <!-- ── Sources ───────────────────────────────────────────────────────────── -->
   <div class="section" id="sources">
     <div class="section-head">
       <div>
@@ -544,7 +555,6 @@
       </div>
     </div>
 
-    <!-- Movix DDL -->
     <div class="card">
       <div class="card-inner">
         <div class="source-card enabled" id="movix-card">
@@ -567,7 +577,28 @@
       </div>
     </div>
 
-    <!-- Library AllDebrid -->
+    <div class="card">
+      <div class="card-inner">
+        <div class="source-card" id="wawacity-card">
+          <div class="source-top">
+            <div class="src-dot" id="wawacity-dot"></div>
+            <span class="src-name">Wawacity</span>
+            <span class="tag tag-ddl">DDL</span>
+            <button class="chevron-btn" id="wawacity-chevron" onclick="toggleExpand('wawacity')">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+            <input type="checkbox" class="switch" id="enable-wawacity" onchange="syncWawacity();rebuild()"/>
+          </div>
+          <div class="source-body" id="body-wawacity">
+            <div>
+              <label class="form-label">URL personnalisée</label>
+              <input type="text" class="input-field" id="wawacity-url" placeholder="https://www.wawacity.golf/" oninput="rebuild()"/>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="card">
       <div class="card-inner">
         <div class="source-card" id="library-card">
@@ -596,7 +627,6 @@
     </div>
   </div>
 
-  <!-- ── Filtres ────────────────────────────────────────────────────────────── -->
   <div class="section" id="filtres">
     <div class="section-head">
       <div>
@@ -608,10 +638,27 @@
       <div class="card-inner">
         <div class="toggle-row">
           <div>
-            <div class="toggle-name">VOSTFR</div>
-            <div class="toggle-desc">Accepte aussi les versions originales sous-titrées en français</div>
+            <div class="toggle-name">Langues</div>
+            <div class="toggle-desc">Versions acceptées — sélectionnez tout ce que vous souhaitez voir</div>
           </div>
-          <input type="checkbox" class="switch" id="vostfr" onchange="rebuild()"/>
+          <div class="lang-pills">
+            <label class="lang-pill active" id="pill-fr" onclick="toggleLang('fr',this)">
+              <input type="checkbox" id="lang-fr" checked/>🇫🇷 Français
+            </label>
+            <label class="lang-pill" id="pill-multi" onclick="toggleLang('multi',this)">
+              <input type="checkbox" id="lang-multi"/>🌍 Multi
+            </label>
+            <label class="lang-pill" id="pill-vostfr" onclick="toggleLang('vostfr',this)">
+              <input type="checkbox" id="lang-vostfr"/>🎬 VOSTFR
+            </label>
+          </div>
+        </div>
+        <div class="toggle-row">
+          <div>
+            <div class="toggle-name">Filtrer les formats non lisibles sur TV</div>
+            <div class="toggle-desc">Exclut les fichiers .iso, .vob, .bdmv, .rar, .zip… non streamables</div>
+          </div>
+          <input type="checkbox" class="switch" id="remove-non-tv" checked onchange="rebuild()"/>
         </div>
         <div class="toggle-row" style="border:none;padding-bottom:0">
           <div style="flex:1">
@@ -628,7 +675,6 @@
     </div>
   </div>
 
-  <!-- ── Affichage ──────────────────────────────────────────────────────────── -->
   <div class="section" id="affichage">
     <div class="section-head">
       <div>
@@ -647,7 +693,6 @@
           Aperçu dans Stremio
         </div>
 
-        <!-- ÉPURÉ preview — 3 cartes, même ligne -->
         <div id="prev-epure">
           <div style="display:flex;flex-direction:column;gap:6px;font-family:-apple-system,'Helvetica Neue',sans-serif">
 
@@ -681,7 +726,6 @@
           </div>
         </div>
 
-        <!-- COMPACT preview — mêmes cartes qu'épuré, texte centré -->
         <div id="prev-compact" style="display:none">
           <div style="display:flex;flex-direction:column;gap:6px;font-family:-apple-system,'Helvetica Neue',sans-serif">
 
@@ -706,7 +750,6 @@
     </div>
   </div>
 
-  <!-- ── Installer ──────────────────────────────────────────────────────────── -->
   <div class="section" id="installer">
     <div class="section-head">
       <div>
@@ -782,12 +825,23 @@ if (typeof PRELOAD_CONFIG !== "undefined") {
     const raw = atob(PRELOAD_CONFIG.replace(/-/g,"+").replace(/_/g,"/") + pad);
     const c   = JSON.parse(decodeURIComponent(escape(raw)));
     if (c.ak) document.getElementById("ad-key").value = c.ak;
-    if (c.vo) document.getElementById("vostfr").checked = true;
+    if (c.lg) {
+      const langs = Array.isArray(c.lg) ? c.lg : [c.lg];
+      document.getElementById("lang-fr").checked = langs.includes("fr");
+      document.getElementById("pill-fr").classList.toggle("active", langs.includes("fr"));
+      document.getElementById("lang-multi").checked = langs.includes("multi");
+      document.getElementById("pill-multi").classList.toggle("active", langs.includes("multi"));
+      document.getElementById("lang-vostfr").checked = langs.includes("vostfr");
+      document.getElementById("pill-vostfr").classList.toggle("active", langs.includes("vostfr"));
+    }
     if (c.mm) { document.getElementById("min-match").value = c.mm; document.getElementById("mm-val").textContent = c.mm+"%"; }
     if (c.mx === false) { document.getElementById("enable-movix").checked = false; syncMovix(); }
     if (c.mu) document.getElementById("movix-url").value = c.mu;
     if (c.el) { document.getElementById("enable-library").checked = true; syncLibrary(); }
     if (c.lp) document.getElementById("library-priority").checked = true;
+    if (c.nt === false) document.getElementById("remove-non-tv").checked = false;
+    if (c.ew) { document.getElementById("enable-wawacity").checked = true; syncWawacity(); }
+    if (c.wu) document.getElementById("wawacity-url").value = c.wu;
     if (c.df) setFmt(c.df);
     if (c.tz) {
       const ids = new Set();
@@ -828,6 +882,25 @@ function syncMovix() {
   dot.style.boxShadow  = on ? "0 0 6px var(--accent)" : "none";
 }
 
+// ── Wawacity ───────────────────────────────────────────────────────────────────
+function syncWawacity() {
+  const on   = document.getElementById("enable-wawacity").checked;
+  const card = document.getElementById("wawacity-card");
+  const dot  = document.getElementById("wawacity-dot");
+  const body = document.getElementById("body-wawacity");
+  card.className = "source-card" + (on ? " enabled" : "");
+  dot.style.background = on ? "var(--accent)" : "var(--text3)";
+  dot.style.boxShadow  = on ? "0 0 6px var(--accent)" : "none";
+  body.style.display   = on ? "flex" : "none";
+}
+// ── Language pills ─────────────────────────────────────────────────────────────
+function toggleLang(id, el) {
+  const cb = document.getElementById("lang-" + id);
+  cb.checked = !cb.checked;
+  el.classList.toggle("active", cb.checked);
+  rebuild();
+}
+
 // ── Library ────────────────────────────────────────────────────────────────────
 function syncLibrary() {
   const on   = document.getElementById("enable-library").checked;
@@ -843,7 +916,7 @@ function syncLibrary() {
 // ── Expand ─────────────────────────────────────────────────────────────────────
 function toggleExpand(id) {
   const body = document.getElementById("body-" + id);
-  const btn  = document.getElementById(id === "movix" ? "movix-chevron" : "chev-" + id);
+  const btn  = document.getElementById(id === "movix" ? "movix-chevron" : id === "wawacity" ? "wawacity-chevron" : "chev-" + id);
   const open = body.classList.toggle("open");
   if (btn) btn.classList.toggle("open", open);
 }
@@ -953,7 +1026,7 @@ function getConfig() {
   });
   return {
     ak: document.getElementById("ad-key").value.trim(),
-    vo: document.getElementById("vostfr").checked,
+    lg: (() => { const l=[]; if(document.getElementById("lang-fr").checked) l.push("fr"); if(document.getElementById("lang-multi").checked) l.push("multi"); if(document.getElementById("lang-vostfr").checked) l.push("vostfr"); return l; })(),
     mm: parseFloat(document.getElementById("min-match").value),
     st: 5.0,
     mx: document.getElementById("enable-movix").checked,
@@ -962,6 +1035,9 @@ function getConfig() {
     tz,
     el: document.getElementById("enable-library").checked,
     lp: document.getElementById("library-priority").checked,
+    nt: document.getElementById("remove-non-tv").checked,
+    ew: document.getElementById("enable-wawacity").checked,
+    wu: document.getElementById("wawacity-url").value.trim(),
   };
 }
 

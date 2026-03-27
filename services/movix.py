@@ -24,6 +24,7 @@ from settings import (
     MOVIX_DECODE_BASE_URL,
     MOVIX_ORIGIN,
     MOVIX_REFERER,
+    DDL_ALLOWED_HOSTS,
 )
 
 logger = logging.getLogger(__name__)
@@ -49,28 +50,11 @@ _LANG_MAP: dict[str, str] = {
     "portuguese":       "pt",
     "portugais":        "pt",
     "japanese":         "ja",
-    "japanese":         "ja",
     "korean":           "ko",
     "arabic":           "ar",
     "arab":             "ar",
     "arabe":            "ar",
 }
-
-# ── Quality string → pipeline quality tag (first match wins) ──────────────────
-_QUALITY_MAP: list[tuple[str, str]] = [
-    ("remux",       "BluRay REMUX"),
-    ("blu-ray",     "BluRay"),
-    ("bluray",      "BluRay"),
-    ("blu ray",     "BluRay"),
-    ("bdrip",       "BluRay"),
-    ("bd rip",      "BluRay"),
-    ("ultra hd",    "WEBRip"),
-    ("web-dl",      "WEB-DL"),
-    ("webrip",      "WEBRip"),
-    ("web",         "WEBRip"),
-    ("hdtv",        "HDTV"),
-    ("cam",         "CAM"),
-]
 
 _API_HEADERS = {
     "accept":          "application/json",
@@ -91,27 +75,6 @@ _DECODE_HEADERS = {
 
 def _normalize_lang(name: str) -> str:
     return _LANG_MAP.get(name.lower(), name.lower())
-
-
-def _normalize_quality(quality_str: str) -> str:
-    q = quality_str.lower()
-    for fragment, mapped in _QUALITY_MAP:
-        if fragment in q:
-            return mapped
-    return "WEBRip"
-
-
-def _guess_resolution(quality_str: str) -> str | None:
-    q = quality_str.lower()
-    if any(x in q for x in ("2160", "4k", "uhd", "ultra hd")):
-        return "2160p"
-    if "1080" in q or "fhd" in q:
-        return "1080p"
-    if "720" in q:
-        return "720p"
-    if "480" in q or "sd" in q:
-        return "480p"
-    return None
 
 
 def _episode_filter(episode: int) -> str:
@@ -161,9 +124,9 @@ class MovixClient:
     ) -> int | None:
         query = title.replace(" ", "+")
         try:
-            r = self.session.get(f"{self._api_base}/search/{query}", timeout=8)
+            r = self.session.get(f"https://app.darkiworld2026.com/api/v1/titles?query={query}", timeout=8)
             r.raise_for_status()
-            results = r.json().get("results") or []
+            results = r.json().get('pagination').get("data") or []
         except Exception as exc:
             logger.warning("Movix │ search error q=%r: %s", title, exc)
             return None
@@ -216,8 +179,8 @@ class MovixClient:
         streams: list[dict] = []
         for raw in raw_streams:
             host = raw.get("host", {})
-            host_name = host.get("name") if isinstance(host, dict) else host
-            if host_name != "1fichier":
+            host_name = (host.get("name") if isinstance(host, dict) else host) or ""
+            if host_name.lower() not in DDL_ALLOWED_HOSTS:
                 continue
 
             stream = self._normalize(raw, media_title, is_serie, season)
@@ -241,7 +204,7 @@ class MovixClient:
         if not stream_id:
             return None
 
-        # ── Languages ─────────────────────────────────────────────────────────
+        # ── Languages (pre-set; PTT fallback since API uses proper lang names) ─
         lang_objects = raw.get("langues_compact") or []
         lang_names   = (
             [l.get("name", "") for l in lang_objects]
@@ -250,56 +213,37 @@ class MovixClient:
         )
         languages = list({_normalize_lang(n) for n in lang_names if n})
 
-        # ── Quality / Resolution ──────────────────────────────────────────────
+        # ── Quality string for torrent_name (PTT will parse it) ───────────────
         quality_raw = (
             (raw.get("qual") or {}).get("qual")
             or raw.get("quality")
             or raw.get("qualite")
             or ""
         )
-        quality    = _normalize_quality(quality_raw)
-        resolution = raw.get("resolution") or _guess_resolution(quality_raw)
-        # "Unknown" from the API is treated as None
-        if resolution == "Unknown":
-            resolution = _guess_resolution(quality_raw)
 
-        # ── Size (raw is integer bytes from the API) ───────────────────────────
+        # ── Size (raw bytes from the API) ──────────────────────────────────────
         try:
             size_bytes = int(float(raw.get("taille", 0)))
         except (TypeError, ValueError):
             size_bytes = 0
-        gb = size_bytes / (1 << 30)
-        size_fmt = f"{gb:.2f} GB" if gb >= 1 else f"{size_bytes / (1 << 20):.0f} MB"
 
         # ── Series metadata ────────────────────────────────────────────────────
-        # Raw API uses 'saison' / 'episode' at top level.
-        # We never return complete seasons from Movix.
         raw_season  = raw.get("saison")
         raw_episode = raw.get("episode")
-
-        seasons  = [int(raw_season)]  if raw_season  else (
-            [season] if season else []
-        )
+        seasons  = [int(raw_season)]  if raw_season  else ([season] if season else [])
         episodes = [int(raw_episode)] if raw_episode else []
 
         return {
-            # ── Identity ──────────────────────────────────────────────────────
-            "infohash":    f"movix_{stream_id}",  # carries the id; no separate movix_id
+            # torrent_name includes quality string so PTT can parse resolution/quality
+            "torrent_name": f"{media_title} {quality_raw}".strip() if quality_raw else media_title,
+            "infohash":    f"movix_{stream_id}",
             "source":      "Movix",
             "stream_type": "ddl",
-            # ── Media ─────────────────────────────────────────────────────────
-            "title":       media_title,
-            "torrent_name": f"{media_title} [{quality_raw}]",
             "languages":   languages,
-            "resolution":  resolution,
-            "quality":     quality,
-            "size":        size_bytes,
-            "size_fmt":    size_fmt,
-            # ── Series ────────────────────────────────────────────────────────
             "seasons":     seasons,
             "episodes":    episodes,
-            "complete":    False,   # Movix never returns complete seasons
-            # ── Pipeline ──────────────────────────────────────────────────────
+            "complete":    False,
+            "size":        size_bytes,
             "cached":      True,
             "seeders":     0,
             "valid":       False,

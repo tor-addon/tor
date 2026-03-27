@@ -45,13 +45,16 @@ def _get_manager(config: UserConfig) -> StreamManager:
         _managers[key] = StreamManager(
             alldebrid_api_key=config.alldebrid_key,
             torznab_sources=config.torznab_sources,
-            language=config.language,
+            languages=config.languages,
             min_match=config.min_match,
             search_timeout=config.search_timeout,
             enable_movix=config.enable_movix,
             movix_url=config.movix_url,
             enable_library=config.enable_library,
             library_priority=config.library_priority,
+            remove_non_tv=config.remove_non_tv,
+            enable_wawacity=config.enable_wawacity,
+            wawacity_url=config.wawacity_url,
         )
     return _managers[key]
 
@@ -224,11 +227,12 @@ async def playback(b64_config: str, token: str, request: Request):
     season      = info.get("s")
     episode     = info.get("e")
     year        = info.get("y")
+    is_library  = bool(info.get("lb", 0))
 
     logger.info("playback  type=%s  hash=%s…  s=%s e=%s", stream_type, infohash[:12], season, episode)
 
     manager = _get_manager(config)
-    stream_dict = {"stream_type": stream_type, "infohash": infohash}
+    stream_dict = {"stream_type": stream_type, "infohash": infohash, "is_library": is_library}
 
     try:
         url = await manager.resolve_stream(stream_dict, season=season, episode=episode, year=year)
@@ -286,6 +290,7 @@ def _format_stream(
     stream_type = stream.get("stream_type", "torrent")
     infohash    = stream.get("infohash", "")
     year        = stream.get("year")
+    source      = stream.get("source", "?")
 
     token = encode_playback_token(
         stream_type=stream_type,
@@ -293,9 +298,8 @@ def _format_stream(
         season=season,
         episode=episode,
         year=year,
+        is_library=(source == "Library"),
     )
-
-    source       = stream.get("source", "?").replace('Library', '⚡️Library')
     resolution   = stream.get("resolution") or "?"
     quality      = stream.get("quality") or ""
     size_fmt     = stream.get("size_fmt") or ""
@@ -312,12 +316,16 @@ def _format_stream(
 
     hdr_tags  = [h for h in hdr if h != "SDR"]
     hdr_str   = " ".join(hdr_tags) if hdr_tags else ""
-    audio_str = " ".join(audio[:2]) if audio else ""
+    # Wawacity streams: show hosts instead of audio tags
+    hosts     = stream.get("hosts") or []
+    audio_str = " | ".join(hosts) if (source == "Wawacity" and hosts) else (" ".join(audio[:2]) if audio else "")
 
-    dot = "🟣" if stream_type == "ddl" else "🔵"
+    is_library   = source == "Library"
+    dot          = "🟣" if stream_type == "ddl" else "🔵"
+    display_src  = "⚡️Library" if is_library else source
 
     if display_format == FORMAT_EPURE:
-        name = f"Tor\n{source}"
+        name = f"Tor - {display_src}"
 
         line1_parts = [f"{dot} {resolution}"]
         if quality:
@@ -347,7 +355,8 @@ def _format_stream(
         description = "\n".join(parts)
 
     else:  # FORMAT_COMPACT
-        name = quality or resolution
+        label       = quality or resolution
+        name        = f"⚡️ {label}" if is_library else label
         right_parts = [p for p in [resolution, size_fmt] if p]
         description = " • ".join(right_parts)
 
