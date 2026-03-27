@@ -43,6 +43,6 @@ ALLDEBRID_BATCH_SIZE   = 80
 ADDON_ID          = "community.stremio-tor"
 ADDON_NAME        = "Tor"
 ADDON_VERSION     = "1.0.3"
-ADDON_DESCRIPTION = "Stremio Optimized +5 Torrent Source, +2 DDL Source,  │ By Adam!"
+ADDON_DESCRIPTION = "Stremio Optimized +5 Torrent Source, +2 DDL Source, Alldebrid Support  │ By Adam!"
 ADDON_LOGO        = "https://images.icon-icons.com/2552/PNG/512/tor_alpha_browser_logo_icon_152957.png"
 LOG_LEVEL         = os.environ.get("LOG_LEVEL", "INFO")
