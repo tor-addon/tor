@@ -478,7 +478,7 @@
     .full { grid-column: 1 / -1; }
     .gap12 { display: flex; flex-direction: column; gap: 12px; }
     /* ─── Language pills ───────────────────────────────────────────────────── */
-    .lang-pills { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+    .lang-pills { display: flex; gap: 8px; flex-wrap: nowrap; margin-top: 10px; }
     .lang-pill {
       display: inline-flex; align-items: center; gap: 5px;
       padding: 6px 12px; border-radius: 8px; cursor: pointer;
@@ -574,12 +574,7 @@
             </div>
           </div>
         </div>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-inner">
-        <div class="source-card" id="wawacity-card">
+        <div class="source-card" id="wawacity-card" style="border-top:1px solid var(--border)">
           <div class="source-top">
             <div class="src-dot" id="wawacity-dot"></div>
             <span class="src-name">Wawacity</span>
@@ -587,12 +582,12 @@
             <button class="chevron-btn" id="wawacity-chevron" onclick="toggleExpand('wawacity')">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
             </button>
-            <input type="checkbox" class="switch" id="enable-wawacity" onchange="syncWawacity();rebuild()"/>
+            <input type="checkbox" class="switch" id="enable-wawacity" checked onchange="syncWawacity();rebuild()"/>
           </div>
           <div class="source-body" id="body-wawacity">
             <div>
               <label class="form-label">URL personnalisée</label>
-              <input type="text" class="input-field" id="wawacity-url" placeholder="https://www.wawacity.golf/" oninput="rebuild()"/>
+              <input type="text" class="input-field" id="wawacity-url" placeholder="Laisser vide = URL par défaut" oninput="rebuild()"/>
             </div>
           </div>
         </div>
@@ -607,7 +602,7 @@
             <span class="src-name">Library</span>
             <span class="tag tag-torrent">TORRENT</span>
             <span class="tag tag-public" style="background:rgba(251,191,36,.08);color:#fbbf24;border-color:rgba(251,191,36,.2)">AllDebrid</span>
-            <input type="checkbox" class="switch" id="enable-library" onchange="syncLibrary();rebuild()"/>
+            <input type="checkbox" class="switch" id="enable-library" checked onchange="syncLibrary();rebuild()"/>
           </div>
           <div class="source-body" id="body-library" style="display:none;padding:14px 16px;border-top:1px solid var(--border)">
             <div style="font-size:12px;color:var(--text2);line-height:1.6">
@@ -636,7 +631,7 @@
     </div>
     <div class="card">
       <div class="card-inner">
-        <div class="toggle-row">
+        <div class="toggle-row" style="flex-direction:column;align-items:flex-start">
           <div>
             <div class="toggle-name">Langues</div>
             <div class="toggle-desc">Versions acceptées — sélectionnez tout ce que vous souhaitez voir</div>
@@ -816,7 +811,7 @@ let custom = [];
 let fmt = "epure";
 let genUrl = "";
 
-DEFAULTS.forEach(d => { S[d.id] = {on:d.on, url:"", apikey:""}; });
+DEFAULTS.forEach(d => { S[d.id] = {on: d.on && !d.key, url:"", apikey:""}; });
 
 // ── Preload ────────────────────────────────────────────────────────────────────
 if (typeof PRELOAD_CONFIG !== "undefined") {
@@ -837,11 +832,11 @@ if (typeof PRELOAD_CONFIG !== "undefined") {
     if (c.mm) { document.getElementById("min-match").value = c.mm; document.getElementById("mm-val").textContent = c.mm+"%"; }
     if (c.mx === false) { document.getElementById("enable-movix").checked = false; syncMovix(); }
     if (c.mu) document.getElementById("movix-url").value = c.mu;
-    if (c.el) { document.getElementById("enable-library").checked = true; syncLibrary(); }
+    if (c.ew === false) { document.getElementById("enable-wawacity").checked = false; }
+    if (c.wu) document.getElementById("wawacity-url").value = c.wu;
+    if (c.el === false) { document.getElementById("enable-library").checked = false; }
     if (c.lp) document.getElementById("library-priority").checked = true;
     if (c.nt === false) document.getElementById("remove-non-tv").checked = false;
-    if (c.ew) { document.getElementById("enable-wawacity").checked = true; syncWawacity(); }
-    if (c.wu) document.getElementById("wawacity-url").value = c.wu;
     if (c.df) setFmt(c.df);
     if (c.tz) {
       const ids = new Set();
@@ -856,6 +851,8 @@ if (typeof PRELOAD_CONFIG !== "undefined") {
 }
 
 renderSources();
+syncWawacity();
+syncLibrary();
 
 // ── Nav active ─────────────────────────────────────────────────────────────────
 function setActive(el) {
@@ -887,11 +884,9 @@ function syncWawacity() {
   const on   = document.getElementById("enable-wawacity").checked;
   const card = document.getElementById("wawacity-card");
   const dot  = document.getElementById("wawacity-dot");
-  const body = document.getElementById("body-wawacity");
   card.className = "source-card" + (on ? " enabled" : "");
   dot.style.background = on ? "var(--accent)" : "var(--text3)";
   dot.style.boxShadow  = on ? "0 0 6px var(--accent)" : "none";
-  body.style.display   = on ? "flex" : "none";
 }
 // ── Language pills ─────────────────────────────────────────────────────────────
 function toggleLang(id, el) {
@@ -938,7 +933,7 @@ function renderSources() {
 
   const html = DEFAULTS.map(d => {
     const s = S[d.id];
-    const openBody = s.apikey || s.url || d.key;
+    const openBody = !d.key && !!(s.apikey || s.url);
     return `
     <div class="source-card ${s.on ? 'enabled' : ''}" id="card-${d.id}">
       <div class="source-top">
@@ -1000,6 +995,16 @@ function setOn(id, v) {
   S[id].on = v;
   const card = document.getElementById("card-"+id);
   card.className = "source-card" + (v ? " enabled" : "");
+  // Auto-expand card when enabling a key-required source without a key
+  const def = DEFAULTS.find(d => d.id === id);
+  if (v && def && def.key && !S[id].apikey) {
+    const body = document.getElementById("body-tz-"+id);
+    const btn  = document.getElementById("chev-"+id);
+    if (body && !body.classList.contains("open")) {
+      body.classList.add("open");
+      if (btn) btn.classList.add("open");
+    }
+  }
   rebuild();
 }
 function setF(id, f, v)   { S[id][f] = v; rebuild(); }
@@ -1014,6 +1019,7 @@ function getConfig() {
   DEFAULTS.forEach(d => {
     const s = S[d.id];
     if (!s.on) return;
+    if (d.key && !s.apikey.trim()) return;  // key required but not set → skip
     const o = {name:d.name, url: s.url.trim() || d.url};
     if (s.apikey.trim()) o.apikey = s.apikey.trim();
     tz.push(o);

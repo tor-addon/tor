@@ -13,6 +13,7 @@ Fallback: return the largest video file.
 """
 
 import logging
+import re
 
 from PTT import parse_title
 
@@ -88,7 +89,11 @@ def _match_episode(videos: list[dict], target_s: int, target_e: int) -> dict | N
             season_candidates.append(f)
 
     if season_candidates:
-        season_candidates.sort(key=lambda f: f.get("n", ""))
+        # Natural sort: "Episode 10" > "Episode 9" (avoids alphabetical 10 < 2)
+        def _natural_key(f: dict) -> list:
+            parts = re.split(r"(\d+)", f.get("n", ""))
+            return [int(p) if p.isdigit() else p.lower() for p in parts]
+        season_candidates.sort(key=_natural_key)
         idx = target_e - 1
         if 0 <= idx < len(season_candidates):
             return season_candidates[idx]

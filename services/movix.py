@@ -16,14 +16,15 @@ infohash = "movix_{id}" – synthetic key for deduplicator, carries the id.
 import base64
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import quote_plus
 
 import requests
 
 from settings import (
-    MOVIX_API_BASE_URL,
     MOVIX_DECODE_BASE_URL,
     MOVIX_ORIGIN,
-    MOVIX_REFERER,
+    DARKIWORLD_API_BASE_URL,
     DDL_ALLOWED_HOSTS,
 )
 
@@ -56,20 +57,17 @@ _LANG_MAP: dict[str, str] = {
     "arabe":            "ar",
 }
 
-_API_HEADERS = {
-    "accept":          "application/json",
-    "accept-language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
-    "referer":         "https://darkiworld2026.com/",
-    "user-agent":      (
+_DARKIWORLD_HEADERS = {
+    "user-agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/145.0.0.0 Safari/537.36"
+        "Chrome/146.0.0.0 Safari/537.36"
     ),
 }
 
 _DECODE_HEADERS = {
     "origin":  MOVIX_ORIGIN,
-    "referer": MOVIX_REFERER,
+    "referer": MOVIX_ORIGIN,
 }
 
 
@@ -83,14 +81,10 @@ def _episode_filter(episode: int) -> str:
 
 
 class MovixClient:
-    __slots__ = ("session", "_api_base", "_decode_base")
+    __slots__ = ()
 
     def __init__(self, base_url: str = "") -> None:
-        self.session     = requests.Session()
-        self.session.headers.update(_API_HEADERS)
-        # Allow custom base URL from user config
-        self._api_base   = base_url.rstrip("/") if base_url else MOVIX_API_BASE_URL
-        self._decode_base = MOVIX_DECODE_BASE_URL
+        pass
 
     # ─────────────────────────────────────────────────────────────────────────
     # 1. ID resolution
@@ -103,18 +97,36 @@ class MovixClient:
         imdb_id: str | None = None,
     ) -> int | None:
         """
-        Search Movix for each title in order.
+        Search Movix for all titles in parallel.
         Validates by tmdb_id OR imdb_id (at least one must match).
-        Stops at first valid match.
+        Returns first valid match.
         """
-        for title in titles:
-            movix_id = self._search_title(title, tmdb_id=tmdb_id, imdb_id=imdb_id)
-            if movix_id is not None:
-                logger.info("Movix │ found id=%d for title=%r", movix_id, title)
-                return movix_id
+        unique = list(dict.fromkeys(t for t in titles if t))
+        if not unique:
+            return None
+        if len(unique) == 1:
+            result = self._search_title(unique[0], tmdb_id=tmdb_id, imdb_id=imdb_id)
+            if result is not None:
+                logger.info("Movix │ found id=%d for title=%r", result, unique[0])
+            else:
+                logger.info("Movix │ no ID found for titles=%s", unique)
+            return result
 
-        logger.info("Movix │ no ID found for titles=%s", titles)
-        return None
+        result: int | None = None
+        with ThreadPoolExecutor(max_workers=min(len(unique), 4)) as pool:
+            futs = {pool.submit(self._search_title, t, tmdb_id, imdb_id): t for t in unique}
+            for f in as_completed(futs):
+                r = f.result()
+                if r is not None:
+                    result = r
+                    logger.info("Movix │ found id=%d for title=%r", r, futs[f])
+                    for remaining in futs:
+                        remaining.cancel()
+                    break
+
+        if result is None:
+            logger.info("Movix │ no ID found for titles=%s", unique)
+        return result
 
     def _search_title(
         self,
@@ -122,11 +134,14 @@ class MovixClient:
         tmdb_id: str | None,
         imdb_id: str | None,
     ) -> int | None:
-        query = title.replace(" ", "+")
         try:
-            r = self.session.get(f"https://app.darkiworld2026.com/api/v1/titles?query={query}", timeout=8)
+            r = requests.get(
+                f"{DARKIWORLD_API_BASE_URL}/search/{quote_plus(title)}",
+                headers=_DARKIWORLD_HEADERS,
+                timeout=8,
+            )
             r.raise_for_status()
-            results = r.json().get('pagination').get("data") or []
+            results = r.json().get("results") or []
         except Exception as exc:
             logger.warning("Movix │ search error q=%r: %s", title, exc)
             return None
@@ -157,7 +172,7 @@ class MovixClient:
         Series: always scoped to a specific episode (no complete seasons).
         """
         params: dict = {
-            "perPage":  "100",
+            "perPage":  "20",
             "title_id": str(movix_id),
             "loader":   "linksdl",
             "season":   str(season) if season else "1",
@@ -168,12 +183,19 @@ class MovixClient:
         if is_serie and episode is not None:
             params["filters"] = _episode_filter(episode)
 
-        try:
-            r = self.session.get(f"{self._api_base}/liens", params=params, timeout=8)
-            r.raise_for_status()
-            raw_streams = r.json().get("pagination", {}).get("data") or []
-        except Exception as exc:
-            logger.warning("Movix │ get_streams error id=%d: %s", movix_id, exc)
+        for attempt in range(2):
+            try:
+                r = requests.get(f"{DARKIWORLD_API_BASE_URL}/liens", params=params, headers=_DARKIWORLD_HEADERS, timeout=8)
+                if r.status_code == 401 and attempt == 0:
+                    logger.warning("Movix │ 401 on get_streams id=%d, retrying…", movix_id)
+                    continue
+                r.raise_for_status()
+                raw_streams = r.json().get("pagination", {}).get("data") or []
+                break
+            except Exception as exc:
+                logger.warning("Movix │ get_streams error id=%d: %s", movix_id, exc)
+                return []
+        else:
             return []
 
         streams: list[dict] = []
@@ -236,7 +258,8 @@ class MovixClient:
         return {
             # torrent_name includes quality string so PTT can parse resolution/quality
             "torrent_name": f"{media_title} {quality_raw}".strip() if quality_raw else media_title,
-            "infohash":    f"movix_{stream_id}",
+            "infohash":    "",
+            "ddl_id":      stream_id,
             "source":      "Movix",
             "stream_type": "ddl",
             "languages":   languages,
@@ -245,8 +268,6 @@ class MovixClient:
             "complete":    False,
             "size":        size_bytes,
             "cached":      True,
-            "seeders":     0,
-            "valid":       False,
         }
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -283,4 +304,4 @@ class MovixClient:
         return link
 
     def close(self) -> None:
-        self.session.close()
+        pass

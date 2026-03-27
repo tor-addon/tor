@@ -36,6 +36,15 @@ from stream_manager import StreamManager
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+# ── CORS headers (constant – created once) ──────────────────────────────────────
+_CORS = {
+    "Access-Control-Allow-Origin":  "*",
+    "Access-Control-Allow-Headers": "*",
+}
+
+# ── Configure HTML (read once at startup) ────────────────────────────────────────
+_CONFIGURE_HTML: str = (Path(__file__).parent / "static" / "configure.html").read_text(encoding="utf-8")
+
 # ── StreamManager pool ──────────────────────────────────────────────────────────
 _managers: dict[str, StreamManager] = {}
 
@@ -60,7 +69,7 @@ def _get_manager(config: UserConfig) -> StreamManager:
 
 
 # ── Short-lived dedup cache (Streams) ───────────────────────────────────────────
-_CACHE_TTL = 15.0
+_CACHE_TTL = 60.0
 _stream_cache: dict[tuple, tuple[float, list]] = {}
 
 def _cache_get(key: tuple) -> list | None:
@@ -81,7 +90,7 @@ def _cache_set(key: tuple, streams: list) -> None:
 # ── Resolved-URL cache (Playback) ───────────────────────────────────────────────
 # Evite de re-résoudre pour chaque range request d'ExoPlayer.
 # ExoPlayer sur Android TV frappe le même token 3-5x en quelques secondes.
-_RESOLVED_URL_TTL = 45.0  # secondes — au-delà, on re-résout
+_RESOLVED_URL_TTL = 300.0  # secondes — au-delà, on re-résout
 _resolved_url_cache: dict[str, tuple[float, str]] = {}
 
 def _resolved_cache_get(token: str) -> str | None:
@@ -108,19 +117,15 @@ async def root():
 
 @router.get("/configure", response_class=HTMLResponse)
 async def configure_page():
-    static_path = Path(__file__).parent / "static" / "configure.html"
-    return static_path.read_text(encoding="utf-8")
+    return _CONFIGURE_HTML
 
 
 @router.get("/{b64_config}/configure", response_class=HTMLResponse)
 async def configure_preload(request: Request, b64_config: str):
-    static_path = Path(__file__).parent / "static" / "configure.html"
-    html = static_path.read_text(encoding="utf-8")
-    html = html.replace(
+    return _CONFIGURE_HTML.replace(
         "// PRELOAD_CONFIG_PLACEHOLDER",
         f"const PRELOAD_CONFIG = {repr(b64_config)};",
     )
-    return html
 
 
 @router.get("/manifest.json")
@@ -133,7 +138,7 @@ async def manifest(request: Request, b64_config: str):
     base_url = str(request.base_url).rstrip("/")
     return JSONResponse(
         _build_manifest(configured=True, base_url=base_url, b64_config=b64_config),
-        headers=_cors(),
+        headers=_CORS,
     )
 
 
@@ -142,7 +147,7 @@ async def stream(request: Request, b64_config: str, media_type: str, stremio_id:
     config = UserConfig.decode(b64_config)
 
     if not config.is_valid():
-        return JSONResponse({"streams": []}, headers=_cors())
+        return JSONResponse({"streams": []}, headers=_CORS)
 
     stremio_id = stremio_id.removesuffix(".json")
 
@@ -173,7 +178,7 @@ async def stream(request: Request, b64_config: str, media_type: str, stremio_id:
                     for s in cached
                 ]
             },
-            headers=_cors(),
+            headers=_CORS,
         )
 
     manager = _get_manager(config)
@@ -182,10 +187,10 @@ async def stream(request: Request, b64_config: str, media_type: str, stremio_id:
         streams = await manager.get_streams(imdb_id, season=season, episode=episode)
     except Exception as exc:
         logger.error("stream pipeline error: %s", exc, exc_info=True)
-        return JSONResponse({"streams": []}, headers=_cors())
+        return JSONResponse({"streams": []}, headers=_CORS)
 
     if not streams:
-        return JSONResponse({"streams": []}, headers=_cors())
+        return JSONResponse({"streams": []}, headers=_CORS)
 
     _cache_set(cache_key, streams)
 
@@ -196,7 +201,7 @@ async def stream(request: Request, b64_config: str, media_type: str, stremio_id:
     ]
 
     logger.info("stream: returning %d stream(s)", len(stremio_streams))
-    return JSONResponse({"streams": stremio_streams}, headers=_cors())
+    return JSONResponse({"streams": stremio_streams}, headers=_CORS)
 
 
 @router.get("/{b64_config}/playback/{token}")
@@ -219,7 +224,7 @@ async def playback(b64_config: str, token: str, request: Request):
         return RedirectResponse(
             cached_url,
             status_code=307,
-            headers={**_cors(), "Accept-Ranges": "bytes", "Cache-Control": "no-store"},
+            headers={**_CORS,"Accept-Ranges": "bytes", "Cache-Control": "no-store"},
         )
 
     stream_type = info.get("t", "torrent")
@@ -232,7 +237,14 @@ async def playback(b64_config: str, token: str, request: Request):
     logger.info("playback  type=%s  hash=%s…  s=%s e=%s", stream_type, infohash[:12], season, episode)
 
     manager = _get_manager(config)
-    stream_dict = {"stream_type": stream_type, "infohash": infohash, "is_library": is_library}
+    stream_dict = {
+        "stream_type": stream_type,
+        "infohash":    infohash,
+        "is_library":  is_library,
+        "di":          info.get("di"),   # movix stream_id
+        "dl":          info.get("dl"),   # wawacity links list
+        "dh":          info.get("dh"),   # wawacity hosts list
+    }
 
     try:
         url = await manager.resolve_stream(stream_dict, season=season, episode=episode, year=year)
@@ -252,7 +264,7 @@ async def playback(b64_config: str, token: str, request: Request):
     return RedirectResponse(
         url,
         status_code=307,
-        headers={**_cors(), "Accept-Ranges": "bytes", "Cache-Control": "no-store"},
+        headers={**_CORS,"Accept-Ranges": "bytes", "Cache-Control": "no-store"},
     )
 
 
@@ -299,6 +311,9 @@ def _format_stream(
         episode=episode,
         year=year,
         is_library=(source == "Library"),
+        ddl_id=stream.get("ddl_id")    if stream_type == "ddl" else None,
+        ddl_links=stream.get("ddl_links") if stream_type == "ddl" else None,
+        ddl_hosts=stream.get("hosts")  if stream_type == "ddl" else None,
     )
     resolution   = stream.get("resolution") or "?"
     quality      = stream.get("quality") or ""
@@ -316,9 +331,8 @@ def _format_stream(
 
     hdr_tags  = [h for h in hdr if h != "SDR"]
     hdr_str   = " ".join(hdr_tags) if hdr_tags else ""
-    # Wawacity streams: show hosts instead of audio tags
     hosts     = stream.get("hosts") or []
-    audio_str = " | ".join(hosts) if (source == "Wawacity" and hosts) else (" ".join(audio[:2]) if audio else "")
+    audio_str = " ".join(audio[:2]) if audio else ""
 
     is_library   = source == "Library"
     dot          = "🟣" if stream_type == "ddl" else "🔵"
@@ -332,6 +346,9 @@ def _format_stream(
             line1_parts.append(quality)
         if hdr_str:
             line1_parts.append(hdr_str)
+        # Wawacity: hosts as own | element, multiple hosts separated by " / "
+        if source == "Wawacity" and hosts:
+            line1_parts.append(" / ".join(hosts))
         line1 = " | ".join(line1_parts)
 
         line2_parts = []
@@ -339,7 +356,7 @@ def _format_stream(
             line2_parts.append(f"🌐 {lang_str}")
         if size_fmt:
             line2_parts.append(size_fmt)
-        if audio_str:
+        if audio_str and source != "Wawacity":
             line2_parts.append(audio_str)
         line2 = " | ".join(line2_parts)
 
@@ -360,9 +377,10 @@ def _format_stream(
         right_parts = [p for p in [resolution, size_fmt] if p]
         description = " • ".join(right_parts)
 
+    group_key = resolution if resolution != "?" else (quality or "x")
     behavior_hints: dict = {
         "notWebReady": True,
-        "bingeGroup":  f"{ADDON_ID}-{resolution}",
+        "bingeGroup":  f"{ADDON_ID}-{group_key}",
     }
 
     if size_bytes > 0:
@@ -379,8 +397,3 @@ def _format_stream(
         "behaviorHints": behavior_hints,
     }
 
-def _cors() -> dict:
-    return {
-        "Access-Control-Allow-Origin":  "*",
-        "Access-Control-Allow-Headers": "*",
-    }

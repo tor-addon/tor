@@ -7,11 +7,11 @@ Single source of truth for all external URLs and global defaults.
 """
 
 # ── AllDebrid ─────────────────────────────────────────────────────────────────
-ALLDEBRID_BASE_URL     = "https://api.alldebrid.com/v4"
+ALLDEBRID_BASE_URL = "https://api.alldebrid.com/v4"
 ALLDEBRID_V41_BASE_URL = "https://api.alldebrid.com/v4.1"
-ALLDEBRID_AGENT        = "Tor"
+ALLDEBRID_AGENT    = "Tor"
 # Hosts supported by AllDebrid – shared by all DDL sources (Movix, Wawacity)
-DDL_ALLOWED_HOSTS: frozenset[str] = frozenset({"1fichier", "turbobit", "rapidgator"})
+DDL_ALLOWED_HOSTS: frozenset[str] = frozenset({"1fichier", "turbobit", "rapidgator", "vidoza"})
 
 # ── TMDB ──────────────────────────────────────────────────────────────────────
 TMDB_BASE_URL    = "https://api.themoviedb.org/3"
@@ -22,10 +22,12 @@ TMDB_DEFAULT_KEY = (
 )
 
 # ── Movix ─────────────────────────────────────────────────────────────────────
-MOVIX_API_BASE_URL    = "https://darkiworld2026.com/api/v1"
-MOVIX_DECODE_BASE_URL = "https://api.movix.blog/api/darkiworld/decode"
-MOVIX_REFERER         = "https://movix.rodeo/"
+MOVIX_API_BASE_URL    = "https://api.movix.blog/api"
+MOVIX_DECODE_BASE_URL = MOVIX_API_BASE_URL + "/darkiworld/decode"
+MOVIX_REFERER         = "https://movix.rodeo"
 MOVIX_ORIGIN          = "https://movix.rodeo"
+
+DARKIWORLD_API_BASE_URL = "https://darkiworld2026.com/api/v1"
 
 # ── Wawacity ──────────────────────────────────────────────────────────────────
 WAWACITY_BASE_URL = "https://www.wawacity.golf"
@@ -40,7 +42,7 @@ ALLDEBRID_BATCH_SIZE   = 80
 # ── Addon metadata ────────────────────────────────────────────────────────────
 ADDON_ID          = "community.stremio-tor"
 ADDON_NAME        = "Tor"
-ADDON_VERSION     = "1.0.0"
-ADDON_DESCRIPTION = "Streams FR via AllDebrid – Torznab + Movix + Wawacity + Library"
+ADDON_VERSION     = "1.0.3"
+ADDON_DESCRIPTION = "Stremio Optimized +5 Torrent Source, +2 DDL Source,  │ By Adam!"
 ADDON_LOGO        = "https://images.icon-icons.com/2552/PNG/512/tor_alpha_browser_logo_icon_152957.png"
 LOG_LEVEL         = os.environ.get("LOG_LEVEL", "INFO")

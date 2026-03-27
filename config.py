@@ -98,12 +98,19 @@ def encode_playback_token(
     episode: int | None = None,
     year: int | None = None,
     is_library: bool = False,
+    ddl_id: int | None = None,
+    ddl_links: list[str] | None = None,
+    ddl_hosts: list[str] | None = None,
 ) -> str:
-    payload = {"t": stream_type, "h": infohash}
-    if season     is not None: payload["s"] = season
-    if episode    is not None: payload["e"] = episode
-    if year       is not None: payload["y"] = year
+    payload: dict = {"t": stream_type}
+    if infohash:               payload["h"]  = infohash
+    if season     is not None: payload["s"]  = season
+    if episode    is not None: payload["e"]  = episode
+    if year       is not None: payload["y"]  = year
     if is_library:             payload["lb"] = 1
+    if ddl_id     is not None: payload["di"] = ddl_id
+    if ddl_links:              payload["dl"] = ddl_links
+    if ddl_hosts:              payload["dh"] = ddl_hosts
     raw = json.dumps(payload, separators=(",", ":"))
     return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
 

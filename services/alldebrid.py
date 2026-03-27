@@ -205,7 +205,11 @@ class AllDebridClient:
         if body.get("status") != "success":
             logger.error("AllDebrid │ upload failed: %s", body.get("error"))
             return None
-        magnet_id = body["data"]["magnets"][0].get("id")
+        magnets = body.get("data", {}).get("magnets") or []
+        if not magnets:
+            logger.error("AllDebrid │ upload: empty magnets in response")
+            return None
+        magnet_id = magnets[0].get("id")
         logger.debug("AllDebrid │ uploaded magnet id=%s", magnet_id)
         return magnet_id
 
@@ -223,7 +227,11 @@ class AllDebridClient:
         if body.get("status") != "success":
             logger.error("AllDebrid │ files fetch failed: %s", body.get("error"))
             return None
-        return body["data"]["magnets"][0]["files"]
+        magnets = body.get("data", {}).get("magnets") or []
+        if not magnets:
+            logger.error("AllDebrid │ files: empty magnets in response")
+            return None
+        return magnets[0].get("files") or []
 
     def _unlock(self, link: str) -> str | None:
         def _call():
@@ -314,12 +322,9 @@ def _flatten_tree(entries: list, path: str = "") -> list[dict]:
 def _apply(objs: list[dict], is_ready: bool) -> None:
     for obj in objs:
         obj["cached"] = is_ready
-        if not is_ready:
-            obj["rank"] = 0
 
 
 def _mark_not_cached(batch: list[str], hash_map: dict[str, list[dict]]) -> None:
     for h in batch:
         for obj in hash_map.get(h, []):
             obj["cached"] = False
-            obj["rank"]   = 0

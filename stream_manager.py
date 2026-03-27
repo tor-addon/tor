@@ -19,11 +19,12 @@ resolve_stream:
 
 import asyncio
 import base64
+import itertools
 import json
 import logging
 import time
+import unicodedata
 from collections import defaultdict
-from typing import Optional
 
 from services.alldebrid import AllDebridClient
 from services.library import LibraryClient
@@ -84,8 +85,8 @@ class StreamManager:
     async def get_streams(
         self,
         imdb_id: str,
-        season: Optional[int] = None,
-        episode: Optional[int] = None,
+        season: int | None = None,
+        episode: int | None = None,
     ) -> list[dict]:
         t0 = time.perf_counter()
         logger.info("━━ [%s] start  s=%s e=%s", imdb_id, season, episode)
@@ -98,11 +99,14 @@ class StreamManager:
 
         is_serie = tmdb_info["type"] == "series"
 
+        # Strip accents once – torrent/DDL names rarely keep them
+        search_titles = [_deaccent(t) for t in tmdb_info["titles"] if t]
+
         # All sources in parallel – coroutines directly, no create_task overhead
         torznab_r, movix_r, wawacity_r, library_r = await asyncio.gather(
-            self._search_torznab(imdb_id, tmdb_info["titles"]),
-            self._search_movix(imdb_id, tmdb_info, is_serie, season, episode) if self._movix else _empty(),
-            self._search_wawacity(tmdb_info["titles"], is_serie, season, episode) if self._wawacity else _empty(),
+            self._search_torznab(imdb_id, search_titles),
+            self._search_movix(imdb_id, tmdb_info, search_titles, is_serie, season, episode) if self._movix else _empty(),
+            self._search_wawacity(search_titles, is_serie, season, episode) if self._wawacity else _empty(),
             self._search_library() if self._library else _empty(),
         )
 
@@ -191,9 +195,9 @@ class StreamManager:
     async def resolve_stream(
         self,
         stream: dict,
-        season: Optional[int] = None,
-        episode: Optional[int] = None,
-        year: Optional[int] = None,
+        season: int | None = None,
+        episode: int | None = None,
+        year: int | None = None,
     ) -> str | None:
         if stream.get("stream_type") == "ddl":
             return await self._resolve_ddl(stream)
@@ -208,74 +212,87 @@ class StreamManager:
 
     async def _resolve_ddl(self, stream: dict) -> str | None:
         infohash = stream.get("infohash", "")
-        if infohash.startswith("movix_"):
-            return await self._resolve_movix(infohash)
-        if infohash.startswith("wawa_"):
-            return await self._resolve_wawacity(infohash)
-        logger.error("StreamManager │ unknown DDL infohash: %s", infohash[:20])
+        if stream.get("di") is not None or infohash.startswith("movix_"):
+            return await self._resolve_movix(stream)
+        if stream.get("dl") or infohash.startswith("wawa_"):
+            return await self._resolve_wawacity(stream)
+        logger.error("StreamManager │ unknown DDL stream: infohash=%s", infohash[:20])
         return None
 
-    async def _resolve_movix(self, infohash: str) -> str | None:
+    async def _resolve_movix(self, stream: dict) -> str | None:
         if not self._movix:
             logger.error("StreamManager │ Movix disabled")
             return None
-        try:
-            stream_id = int(infohash.split("_", 1)[1])
-        except (IndexError, ValueError) as exc:
-            logger.error("StreamManager │ invalid movix infohash: %s", exc)
-            return None
+        # Prefer direct ddl_id field; fall back to parsing infohash (old tokens)
+        stream_id = stream.get("di")
+        if stream_id is None:
+            try:
+                stream_id = int(stream.get("infohash", "").split("_", 1)[1])
+            except (IndexError, ValueError) as exc:
+                logger.error("StreamManager │ invalid movix infohash: %s", exc)
+                return None
         raw_link = await asyncio.to_thread(self._movix.get_direct_link, stream_id)
         if not raw_link:
             return None
         return await asyncio.to_thread(self._ad.unlock_link, raw_link)
 
-    async def _resolve_wawacity(self, infohash: str) -> str | None:
-        try:
-            b64  = infohash[5:]  # strip "wawa_"
-            data = base64.urlsafe_b64decode(b64 + "==")
+    async def _resolve_wawacity(self, stream: dict) -> str | None:
+        # Prefer direct ddl_links field; fall back to decoding infohash (old tokens)
+        links = stream.get("dl")
+        hosts = stream.get("dh") or []
+
+        if not links:
+            infohash = stream.get("infohash", "")
             try:
-                links = json.loads(data)
-                if not isinstance(links, list):
-                    links = [str(links)]
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                links = [data.decode()]   # old single-link format
-        except Exception as exc:
-            logger.error("StreamManager │ invalid wawa infohash: %s", exc)
-            return None
+                b64  = infohash[5:]  # strip "wawa_"
+                data = base64.urlsafe_b64decode(b64 + "==")
+                try:
+                    links = json.loads(data)
+                    if not isinstance(links, list):
+                        links = [str(links)]
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    links = [data.decode()]
+            except Exception as exc:
+                logger.error("StreamManager │ invalid wawa infohash: %s", exc)
+                return None
 
         if not links:
             return None
 
-        logger.info("StreamManager │ Wawacity racing %d link(s)", len(links))
-        return await self._race_wawacity_links(links)
+        pairs = [(link, hosts[i] if i < len(hosts) else f"link_{i+1}")
+                 for i, link in enumerate(links)]
+        logger.info("Wawacity │ racing %d link(s): %s",
+                    len(pairs), " | ".join(h for _, h in pairs))
+        return await self._race_wawacity_links(pairs)
 
-    async def _race_wawacity_links(self, links: list[str]) -> str | None:
+    async def _race_wawacity_links(self, pairs: list[tuple[str, str]]) -> str | None:
         """
-        Run AllDebrid redirector concurrently on all links.
+        Run AllDebrid redirector concurrently on all (link, host) pairs.
         Each link gets up to 2 attempts. Returns the first successful CDN URL.
         """
-        async def _try_link(link: str) -> str | None:
+        async def _try_link(link: str, host: str) -> tuple[str | None, str]:
             for attempt in range(1, 3):
                 resolved = await asyncio.to_thread(self._ad.redirector_link, link)
                 if not resolved:
                     if attempt < 2:
-                        logger.debug("StreamManager │ Wawacity retry %s…", link[:60])
+                        logger.debug("Wawacity │ %s – redirector failed, retrying…", host)
                     continue
                 unlocked = await asyncio.to_thread(self._ad.unlock_link, resolved)
                 if unlocked:
-                    logger.info("StreamManager │ Wawacity ✓ attempt=%d %s…", attempt, link[:60])
-                    return unlocked
-            logger.warning("StreamManager │ Wawacity ✗ %s…", link[:60])
-            return None
+                    logger.info("Wawacity │ ✓ %s (attempt=%d)", host, attempt)
+                    return unlocked, host
+            logger.warning("Wawacity │ ✗ %s – all attempts failed", host)
+            return None, host
 
-        if len(links) == 1:
-            return await _try_link(links[0])
+        if len(pairs) == 1:
+            url, _ = await _try_link(*pairs[0])
+            return url
 
-        tasks = [asyncio.create_task(_try_link(link)) for link in links]
+        tasks = [asyncio.create_task(_try_link(link, host)) for link, host in pairs]
         result: str | None = None
         try:
             for coro in asyncio.as_completed(tasks):
-                url = await coro
+                url, host = await coro
                 if url:
                     result = url
                     break
@@ -289,13 +306,12 @@ class StreamManager:
                         pass
 
         if not result:
-            logger.warning("StreamManager │ Wawacity: all %d link(s) failed", len(links))
+            logger.warning("Wawacity │ all %d link(s) failed", len(pairs))
         return result
 
     # ─────────────────────────────────────────────────────────────────────────
 
     def close(self) -> None:
-        self._tmdb.close()
         self._ad.close()
         if self._movix:
             self._movix.close()
@@ -326,17 +342,14 @@ class StreamManager:
                 return []
 
         batches = await asyncio.gather(*[_one(s, t) for s in self._sources for t in unique])
-        out: list[dict] = []
-        for b in batches:
-            out.extend(b)
-        return out
+        return list(itertools.chain.from_iterable(batches))
 
-    async def _search_movix(self, imdb_id, tmdb_info, is_serie, season, episode) -> list[dict]:
+    async def _search_movix(self, imdb_id, tmdb_info, search_titles, is_serie, season, episode) -> list[dict]:
         try:
             movix_id = await asyncio.wait_for(
                 asyncio.to_thread(
                     self._movix.find_id,
-                    tmdb_info["titles"],
+                    search_titles,                  # deaccented for search query
                     tmdb_id=tmdb_info.get("tmdb_id"),
                     imdb_id=imdb_id,
                 ),
@@ -356,7 +369,7 @@ class StreamManager:
             return await asyncio.wait_for(
                 asyncio.to_thread(
                     self._movix.get_streams,
-                    movix_id, tmdb_info["titles"][0], is_serie, season, episode,
+                    movix_id, (tmdb_info["titles"] or [""])[0], is_serie, season, episode,
                 ),
                 timeout=self._search_timeout,
             )
@@ -398,6 +411,11 @@ class StreamManager:
 
 async def _empty() -> list:
     return []
+
+
+def _deaccent(text: str) -> str:
+    """NFD decompose → drop combining diacritical marks → ASCII."""
+    return unicodedata.normalize("NFD", text).encode("ascii", "ignore").decode("ascii")
 
 
 def _reject_detail(stream: dict, reason: str) -> str:

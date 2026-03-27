@@ -94,7 +94,8 @@ class Torznab:
             guid = item.findtext("guid") or ""
 
             infohash: str | None = None
-            seeders = 0
+            seeders  = 0
+            size_attr: str | None = None
             for attr in item.findall("t:attr", _NS):
                 name = attr.get("name")
                 if name == "infohash":
@@ -102,6 +103,8 @@ class Torznab:
                 elif name == "seeders":
                     v = attr.get("value")
                     seeders = int(v) if v and v.isdigit() else 0
+                elif name == "size":
+                    size_attr = attr.get("value")
 
             if not infohash and "btih:" in guid.lower():
                 infohash = guid.lower().split("btih:")[-1].split("&")[0]
@@ -110,9 +113,14 @@ class Torznab:
             if not infohash:
                 continue
 
+            try:
+                size = int(size_attr or item.findtext("size") or 0)
+            except (ValueError, TypeError):
+                size = 0
+
             results.append({
                 "title":       item.findtext("title"),
-                "size":        item.findtext("size"),
+                "size":        size,
                 "source":      self.name,
                 "stream_type": "torrent",
                 "seeders":     seeders,

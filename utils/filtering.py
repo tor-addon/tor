@@ -46,6 +46,16 @@ _NON_TV_EXT: frozenset[str] = frozenset({
     ".exe", ".bat",
 })
 
+# ── Resolution inference from tags (last-resort when PTT finds nothing) ────────
+# Ordered by specificity: checked in order, first match wins.
+_RES_TAGS: list[tuple[re.Pattern, str]] = [
+    (re.compile(r'\bULTRA[.\s-]?HD\b', re.IGNORECASE), "2160p"),  # Ultra HD = 4K
+    (re.compile(r'\bUHD\b',            re.IGNORECASE), "2160p"),  # UHD = 4K
+    (re.compile(r'\b4K\b',             re.IGNORECASE), "2160p"),  # explicit 4K label
+    (re.compile(r'\bFull[.\s-]?HD\b',  re.IGNORECASE), "1080p"),  # Full HD = 1080p
+    (re.compile(r'\bFHD\b',            re.IGNORECASE), "1080p"),  # FHD = 1080p
+]
+
 
 def _clean(text: str) -> str:
     """NFKD → ASCII → lowercase → strip punctuation → collapse spaces."""
@@ -154,6 +164,9 @@ class StreamFilter:
             lang_lower = {l.lower() for l in langs}
 
         if any(x in name_lower for x in ("vostfr", "vf+")) and "vostfr" not in lang_lower:
+            if "multi" not in lang_lower:
+                # VOSTFR = no French audio; remove fr unless explicitly multi
+                langs = [l for l in langs if l.lower() not in ("fr", "vff")]
             langs.append("vostfr")
             stream["languages"] = langs
             lang_lower = {l.lower() for l in langs}
@@ -213,7 +226,7 @@ class StreamFilter:
         best: float   = 0.0
         for tmdb_title in self._tmdb_titles:
             for candidate in (parsed_title, torrent_clean):
-                score = fuzz.ratio(candidate, tmdb_title)
+                score = fuzz.token_sort_ratio(candidate, tmdb_title)
                 if score > best:
                     best = score
                     if best == 100.0:
@@ -232,7 +245,14 @@ class StreamFilter:
         except (ValueError, TypeError):
             stream["size_fmt"] = ""
 
-        # ── 7. Default quality fallback ──────────────────────────────────────
+        # ── 7. Resolution fallback from known tags (PTT didn't find one) ────────
+        if not stream.get("resolution"):
+            for pattern, res in _RES_TAGS:
+                if pattern.search(raw_title):
+                    stream["resolution"] = res
+                    break
+
+        # ── 8. Default quality fallback ───────────────────────────────────────
         if not stream.get("quality"):
             stream["quality"] = "WEB-DL"
 

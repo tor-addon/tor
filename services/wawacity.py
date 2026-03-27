@@ -7,7 +7,7 @@ Uses ThreadPoolExecutor internally for parallel page fetches.
 Flow:
   get_streams(titles, is_serie, season, episode) → pipeline-compatible stream dicts
   Resolution at playback time (concurrent host race):
-    infohash = "wawa_<b64url_json_list_of_links>"
+    ddl_links = [link1, link2, …]  (stored directly, no infohash encoding)
     → AllDebrid.redirector_link(link) concurrently for all links
     → first success → AllDebrid.unlock_link(resolved) → CDN URL
 
@@ -16,8 +16,6 @@ Pre-set only: languages (from page meta), year (scraped from HTML), seasons/epis
 PTT parses quality/resolution from torrent_name (filename or full h1 title).
 """
 
-import base64
-import json
 import logging
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -69,10 +67,6 @@ def _map_lang(raw: str) -> list[str]:
     return ["fr"]
 
 
-def _encode_links(links: list[str]) -> str:
-    return base64.urlsafe_b64encode(
-        json.dumps(links, separators=(",", ":")).encode()
-    ).decode().rstrip("=")
 
 
 def _abs(base: str, path: str) -> str:
@@ -128,13 +122,12 @@ class WawacityClient:
             logger.debug("Wawacity │ fetch error %s: %s", url[:60], e)
             return None
 
-    def _fetch_many(self, urls: set[str]) -> dict[str, HTMLParser | None]:
+    def _fetch_many(self, urls: set[str]) -> list[HTMLParser | None]:
         if len(urls) == 1:
-            u = next(iter(urls))
-            return {u: self._fetch(u)}
+            return [self._fetch(next(iter(urls)))]
         with ThreadPoolExecutor(max_workers=min(len(urls), 8)) as pool:
-            futs = {pool.submit(self._fetch, u): u for u in urls}
-            return {futs[f]: f.result() for f in as_completed(futs)}
+            futs = [pool.submit(self._fetch, u) for u in urls]
+            return [f.result() for f in as_completed(futs)]
 
     # ─────────────────────────────────────────────────────────────────────────
     # Page metadata helpers
@@ -185,14 +178,18 @@ class WawacityClient:
         """
         Extract a single DDL link from a table row.
         Returns None if the row is not a valid, allowed, single-file link.
+        Host: td[width="120px"]  |  Size: td[width="80px"]
         """
-        # Host cell
-        td = row.css_first('td[width="120px"]') or row.css_first('td[width="80px"]')
-        if not td:
+        host_td = row.css_first('td[width="120px"]')
+        if not host_td:
             return None
-        host = td.text(strip=True).lower()
+        host = host_td.text(strip=True).lower()
         if host not in DDL_ALLOWED_HOSTS:
             return None
+
+        # Size is in the 80px column (separate from host)
+        size_td  = row.css_first('td[width="80px"]')
+        row_size = _parse_size(size_td.text(strip=True)) if size_td else 0
 
         a = row.css_first("a.link")
         if not a:
@@ -217,8 +214,9 @@ class WawacityClient:
 
         return {
             "link":     _abs(self._base, href),
-            "host":     td.text(strip=True),
+            "host":     host_td.text(strip=True),
             "filename": fn,
+            "size":     row_size,
         }
 
     def _rows_to_stream(
@@ -236,6 +234,7 @@ class WawacityClient:
         links:    list[str] = []
         hosts:    list[str] = []
         filename: str       = ""
+        row_size: int       = 0
 
         for row in rows:
             info = self._extract_link_row(row)
@@ -245,31 +244,35 @@ class WawacityClient:
             hosts.append(info["host"])
             if not filename and info["filename"]:
                 filename = info["filename"]
+            if not row_size and info.get("size"):
+                row_size = info["size"]
 
         if not links:
             return None
 
         # torrent_name: filename (ideal for PTT quality parsing) else full h1 title
         torrent_name = filename or h1_title
+        # Size: prefer page-level (movies), fall back to row-level (series)
+        final_size   = size if size > 0 else row_size
 
         stream: dict = {
             "torrent_name": torrent_name,
-            "infohash":     f"wawa_{_encode_links(links)}",
+            "infohash":     "",
+            "ddl_links":    links,
             "source":       "Wawacity",
             "stream_type":  "ddl",
             "cached":       True,
             "languages":    _map_lang(language),
             "year":         year,
-            "size":         size,
+            "size":         final_size,
             "hosts":        hosts,
-            "seeders":      0,
-            "valid":        False,
         }
 
         if is_serie and season is not None:
             stream["seasons"]  = [season]
         if is_serie and episode is not None:
             stream["episodes"] = [episode]
+
 
         return stream
 
@@ -296,9 +299,8 @@ class WawacityClient:
             if a.css_first("button"):
                 urls.add(_abs(self._base, a.attributes["href"]))
 
-        pages = self._fetch_many(urls)
         out: list[dict] = []
-        for page in pages.values():
+        for page in self._fetch_many(urls):
             if not page:
                 continue
             h1_title          = self._page_h1(page)
@@ -379,9 +381,8 @@ class WawacityClient:
                 for a in block.css("ul.wa-post-list-ofLinks li a"):
                     urls.add(_abs(self._base, a.attributes["href"]))
 
-        pages = self._fetch_many(urls)
         out: list[dict] = []
-        for page in pages.values():
+        for page in self._fetch_many(urls):
             if page:
                 out.extend(self._ep_streams_from_dom(page, season, episode))
         return out

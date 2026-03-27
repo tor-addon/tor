@@ -22,7 +22,7 @@ from settings import ALLDEBRID_V41_BASE_URL
 logger = logging.getLogger(__name__)
 
 _READY_STATUS = "Ready"
-_CACHE_TTL    = 15.0   # seconds – mirrors the stream pipeline dedup cache
+_CACHE_TTL    = 15.0   # seconds
 
 
 class LibraryClient:

@@ -36,7 +36,7 @@ _QUALITY: dict[str, int] = {
     "bluray":        60_000,
     "web-dl":        40_000,
     "web":           40_000,
-    "webrip":        40_000,
+    "webrip":        35_000,
     "hdtv":          20_000,
     "cam":         -500_000,
 }

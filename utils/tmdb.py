@@ -3,6 +3,8 @@ utils/tmdb.py
 ─────────────
 TMDB /find wrapper. Handles movies and TV series.
 Synchronous – call via asyncio.to_thread().
+
+Module-level cache: IMDB IDs are immutable → cache forever (bounded at 500 entries).
 """
 
 import logging
@@ -12,6 +14,10 @@ import requests
 from settings import TMDB_BASE_URL, TMDB_DEFAULT_KEY
 
 logger = logging.getLogger(__name__)
+
+# Shared across all StreamManager instances / requests
+_cache: dict[str, dict] = {}
+_CACHE_MAX = 500
 
 
 class TMDBApi:
@@ -28,6 +34,10 @@ class TMDBApi:
             {"titles": [...], "imdb_id": ..., "tmdb_id": ..., "type": "movie"|"series", "year": int}
         Raises ValueError if no TMDB match.
         """
+        if imdb_id in _cache:
+            logger.info("TMDB │ cache HIT %s", imdb_id)
+            return _cache[imdb_id]
+
         try:
             r = self.session.get(
                 f"{TMDB_BASE_URL}/find/{imdb_id}",
@@ -46,14 +56,12 @@ class TMDBApi:
             title_orig = item.get("original_title") or ""
             date_raw   = item.get("release_date", "")
             media_type = "movie"
-
         elif data.get("tv_results"):
             item       = data["tv_results"][0]
             title_fr   = item.get("name") or ""
             title_orig = item.get("original_name") or ""
             date_raw   = item.get("first_air_date", "")
             media_type = "series"
-
         else:
             raise ValueError(f"No TMDB result for {imdb_id!r}")
 
@@ -68,17 +76,17 @@ class TMDBApi:
             pass
 
         result = {
-            "titles":   titles,
-            "imdb_id":  imdb_id,
-            "tmdb_id":  str(item.get("id", "")),
-            "type":     media_type,
-            "year":     year,
+            "titles":  titles,
+            "imdb_id": imdb_id,
+            "tmdb_id": str(item.get("id", "")),
+            "type":    media_type,
+            "year":    year,
         }
-        logger.info(
-            "TMDB │ %s → type=%s  year=%s  titles=%s",
-            imdb_id, media_type, year, titles,
-        )
+        logger.info("TMDB │ %s → type=%s  year=%s  titles=%s",
+                    imdb_id, media_type, year, titles)
+
+        if len(_cache) >= _CACHE_MAX:
+            _cache.pop(next(iter(_cache)))
+        _cache[imdb_id] = result
         return result
 
-    def close(self) -> None:
-        self.session.close()
