@@ -57,12 +57,14 @@ class StreamManager:
         remove_non_tv: bool = True,
         enable_wawacity: bool = False,
         wawacity_url: str = "",
+        allowed_resolutions: list[str] | None = None,
     ) -> None:
-        self._languages        = languages or list(DEFAULT_LANGUAGES)
-        self._min_match        = min_match
-        self._search_timeout   = search_timeout
-        self._library_priority = library_priority
-        self._remove_non_tv    = remove_non_tv
+        self._languages           = languages or list(DEFAULT_LANGUAGES)
+        self._min_match           = min_match
+        self._search_timeout      = search_timeout
+        self._library_priority    = library_priority
+        self._remove_non_tv       = remove_non_tv
+        self._allowed_resolutions = allowed_resolutions or []
 
         self._tmdb      = TMDBApi(tmdb_api_key)
         self._ad        = AllDebridClient(alldebrid_api_key)
@@ -70,7 +72,9 @@ class StreamManager:
         self._library   = LibraryClient(alldebrid_api_key) if enable_library else None
         self._wawacity  = WawacityClient(wawacity_url) if enable_wawacity else None
         self._sources   = [
-            Torznab(s["name"], s["url"], s.get("apikey"))
+            Torznab(s["name"], s["url"], s.get("apikey"),
+                    movie_cats=s.get("movie_cats"),
+                    series_cats=s.get("series_cats"))
             for s in torznab_sources
         ]
 
@@ -104,7 +108,7 @@ class StreamManager:
 
         # All sources in parallel – coroutines directly, no create_task overhead
         torznab_r, movix_r, wawacity_r, library_r = await asyncio.gather(
-            self._search_torznab(imdb_id, search_titles),
+            self._search_torznab(imdb_id, search_titles, is_serie),
             self._search_movix(imdb_id, tmdb_info, search_titles, is_serie, season, episode) if self._movix else _empty(),
             self._search_wawacity(search_titles, is_serie, season, episode) if self._wawacity else _empty(),
             self._search_library() if self._library else _empty(),
@@ -141,6 +145,7 @@ class StreamManager:
             target_episode=episode,
             target_languages=self._languages,
             remove_non_tv=self._remove_non_tv,
+            allowed_resolutions=self._allowed_resolutions,
         )
 
         valid: list[dict] = []
@@ -330,13 +335,14 @@ class StreamManager:
 
     # ─────────────────────────────────────────────────────────────────────────
 
-    async def _search_torznab(self, imdb_id: str, titles: list[str]) -> list[dict]:
+    async def _search_torznab(self, imdb_id: str, titles: list[str], is_serie: bool = False) -> list[dict]:
         unique = list(dict.fromkeys(titles))
 
         async def _one(source: Torznab, title: str) -> list[dict]:
+            cats = source.series_cats if is_serie else source.movie_cats
             try:
                 return await asyncio.wait_for(
-                    asyncio.to_thread(source.search, title),
+                    asyncio.to_thread(source.search, title, categories=cats or None),
                     timeout=self._search_timeout,
                 )
             except asyncio.TimeoutError:

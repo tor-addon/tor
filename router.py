@@ -64,6 +64,7 @@ def _get_manager(config: UserConfig) -> StreamManager:
             remove_non_tv=config.remove_non_tv,
             enable_wawacity=config.enable_wawacity,
             wawacity_url=config.wawacity_url,
+            allowed_resolutions=config.allowed_resolutions,
         )
     return _managers[key]
 

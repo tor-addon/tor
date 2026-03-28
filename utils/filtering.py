@@ -72,6 +72,7 @@ class StreamFilter:
         "media_type", "tmdb_year", "min_match",
         "target_season", "target_episode", "target_languages",
         "remove_trash", "remove_non_tv", "_tmdb_titles",
+        "allowed_resolutions",
     )
 
     def __init__(
@@ -83,16 +84,21 @@ class StreamFilter:
         target_languages: list[str] | None = None,
         remove_trash: bool = True,
         remove_non_tv: bool = True,
+        allowed_resolutions: list[str] | None = None,
     ) -> None:
-        self.media_type       = tmdb_info.get("type")
-        self.tmdb_year        = tmdb_info.get("year")
-        self.min_match        = min_match
-        self.target_season    = target_season
-        self.target_episode   = target_episode
-        self.target_languages = [l.lower() for l in (target_languages or [])]
-        self.remove_trash     = remove_trash
-        self.remove_non_tv    = remove_non_tv
+        self.media_type          = tmdb_info.get("type")
+        self.tmdb_year           = tmdb_info.get("year")
+        self.min_match           = min_match
+        self.target_season       = target_season
+        self.target_episode      = target_episode
+        self.target_languages    = [l.lower() for l in (target_languages or [])]
+        self.remove_trash        = remove_trash
+        self.remove_non_tv       = remove_non_tv
         self._tmdb_titles: list[str] = [_clean(t) for t in tmdb_info.get("titles", []) if t]
+        # frozenset for O(1) lookup; "4k" normalised to "2160p" at check time
+        self.allowed_resolutions: frozenset[str] = frozenset(
+            r.lower() for r in (allowed_resolutions or [])
+        )
 
     # ─────────────────────────────────────────────────────────────────────────
 
@@ -266,7 +272,16 @@ class StreamFilter:
                     stream["resolution"] = res
                     break
 
-        # ── 8. Default quality fallback ───────────────────────────────────────
+        # ── 8. Resolution filter (allowed_resolutions set by user) ───────────────
+        if self.allowed_resolutions:
+            raw_res = (stream.get("resolution") or "").lower()
+            # normalise "4k" alias → "2160p" to match what the UI emits
+            res_key = "2160p" if raw_res == "4k" else (raw_res or "?")
+            if res_key not in self.allowed_resolutions:
+                stream["invalid_reason"] = "Resolution"
+                return False
+
+        # ── 9. Default quality fallback ───────────────────────────────────────
         if not stream.get("quality"):
             stream["quality"] = "WEB-DL"
 

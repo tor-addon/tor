@@ -24,13 +24,22 @@ _RETRY_DELAY    = 0.5
 
 
 class Torznab:
-    __slots__ = ("name", "url", "apikey", "session")
+    __slots__ = ("name", "url", "apikey", "session", "movie_cats", "series_cats")
 
-    def __init__(self, name: str, url: str, apikey: str | None = None) -> None:
-        self.name    = name
-        self.url     = url
-        self.apikey  = apikey
-        self.session = requests.Session()
+    def __init__(
+        self,
+        name: str,
+        url: str,
+        apikey: str | None = None,
+        movie_cats: list[int] | None = None,
+        series_cats: list[int] | None = None,
+    ) -> None:
+        self.name        = name
+        self.url         = url
+        self.apikey      = apikey
+        self.session     = requests.Session()
+        self.movie_cats  = movie_cats or []
+        self.series_cats = series_cats or []
 
     def search(self, query: str, categories: list[int] | None = None, **kwargs) -> list[dict]:
         params: dict = {"t": "search", "limit": TORZNAB_RESULT_LIMIT}

@@ -30,8 +30,9 @@ class UserConfig:
     enable_library:    bool       = False
     library_priority:  bool       = False
     remove_non_tv:     bool       = True
-    enable_wawacity:   bool       = False
-    wawacity_url:      str        = ""
+    enable_wawacity:      bool       = False
+    wawacity_url:         str        = ""
+    allowed_resolutions:  list[str]  = field(default_factory=list)
 
     def encode(self) -> str:
         payload = {
@@ -48,6 +49,7 @@ class UserConfig:
             "nt": self.remove_non_tv,
             "ew": self.enable_wawacity,
             "wu": self.wawacity_url,
+            "ar": self.allowed_resolutions,
         }
         raw = json.dumps(payload, separators=(",", ":"))
         return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
@@ -80,8 +82,9 @@ class UserConfig:
                 enable_library   = bool(data.get("el", False)),
                 library_priority = bool(data.get("lp", False)),
                 remove_non_tv    = bool(data.get("nt", True)),
-                enable_wawacity  = bool(data.get("ew", False)),
-                wawacity_url     = data.get("wu", ""),
+                enable_wawacity     = bool(data.get("ew", False)),
+                wawacity_url        = data.get("wu", ""),
+                allowed_resolutions = data.get("ar", []),
             )
         except Exception as exc:
             logger.warning("Config decode error: %s – using defaults", exc)
