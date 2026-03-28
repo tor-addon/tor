@@ -30,6 +30,11 @@ DARKIWORLD_API_BASE_URL = "https://darkiworld2026.com/api/v1"
 # ── Wawacity ──────────────────────────────────────────────────────────────────
 WAWACITY_BASE_URL = "https://www.wawacity.pizza"
 
+# ── Sources Torznab où MULTI = français garanti ───────────────────────────────
+# Sur Ygg, C411, Torr9 : MULTI inclut toujours le français.
+# Sur les autres (StremThru, Zilean…) : MULTI = plusieurs langues sans garantie.
+FRENCH_MULTI_SOURCES: frozenset[str] = frozenset({"Ygg", "C411", "Torr9"})
+
 # ── Pipeline defaults ─────────────────────────────────────────────────────────
 DEFAULT_LANGUAGES      = ["fr"]   # list – can include "fr", "multi", "vostfr"
 DEFAULT_MIN_MATCH      = 75.0

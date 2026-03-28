@@ -41,7 +41,7 @@ _LANG_MAP: dict[str, list[str]] = {
     "true french":            ["fr"],
     "vostfr":                 ["vostfr"],
     "vost":                   ["vostfr"],
-    "multi":                  ["multi", "fr"],
+    "multi":                  ["multi"],
     "multi (french)":         ["multi", "fr"],
     "multi(french)":          ["multi", "fr"],
     "multi (truefrench)":     ["multi", "fr"],

@@ -25,6 +25,8 @@ import unicodedata
 from PTT import parse_title
 from rapidfuzz import fuzz
 
+from settings import FRENCH_MULTI_SOURCES
+
 logger = logging.getLogger(__name__)
 
 _LANG_ALIASES: dict[str, str] = {
@@ -108,6 +110,10 @@ class StreamFilter:
                 subs = stream.get("subtitles") or []
                 if "fr" in {str(s).lower() for s in subs}:
                     return True
+            elif tl == "fr":
+                # "fr" matches any French audio variant (vff = TrueFrench, vfq = Quebec)
+                if lang_set & {"fr", "vff", "vfq"}:
+                    return True
             elif tl in lang_set:
                 return True
         return False
@@ -160,7 +166,13 @@ class StreamFilter:
 
         if "multi" in name_lower and "multi" not in lang_lower:
             langs.append("multi")
-            if "fr" not in lang_lower:
+            # Add "fr" if:
+            #   • source is a known French-multi tracker (Ygg, C411, Torr9 – MULTI always includes FR)
+            #   • OR a French variant is already explicitly present (vff/vfq/fr from PTT or the source)
+            # Other sources (StremThru, Zilean…): MULTI alone ≠ French.
+            source = stream.get("source", "")
+            has_french = source in FRENCH_MULTI_SOURCES or not {"fr", "vff", "vfq"}.isdisjoint(lang_lower)
+            if has_french and "fr" not in lang_lower:
                 langs.append("fr")
             stream["languages"] = langs
             lang_lower = {l.lower() for l in langs}
