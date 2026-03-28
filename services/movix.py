@@ -30,6 +30,10 @@ from settings import (
 
 logger = logging.getLogger(__name__)
 
+# ── Title → Movix ID cache (module-level; IDs are stable, no TTL needed) ─────
+_ID_CACHE: dict[tuple[str, str], int | None] = {}
+_ID_CACHE_MAX = 500
+
 # ── Language name → ISO 639-1 ──────────────────────────────────────────────────
 _LANG_MAP: dict[str, str] = {
     "french":           "fr",
@@ -99,33 +103,41 @@ class MovixClient:
         """
         Search Movix for all titles in parallel.
         Validates by tmdb_id OR imdb_id (at least one must match).
-        Returns first valid match.
+        Returns first valid match. Results are cached (IDs are stable).
         """
+        cache_key = (str(tmdb_id or ""), str(imdb_id or ""))
+        if cache_key in _ID_CACHE:
+            cached = _ID_CACHE[cache_key]
+            logger.debug("Movix │ cache HIT id=%s tmdb=%s imdb=%s", cached, tmdb_id, imdb_id)
+            return cached
+
         unique = list(dict.fromkeys(t for t in titles if t))
         if not unique:
             return None
+
+        result: int | None = None
         if len(unique) == 1:
             result = self._search_title(unique[0], tmdb_id=tmdb_id, imdb_id=imdb_id)
             if result is not None:
                 logger.info("Movix │ found id=%d for title=%r", result, unique[0])
             else:
                 logger.info("Movix │ no ID found for titles=%s", unique)
-            return result
+        else:
+            with ThreadPoolExecutor(max_workers=min(len(unique), 4)) as pool:
+                futs = {pool.submit(self._search_title, t, tmdb_id, imdb_id): t for t in unique}
+                for f in as_completed(futs):
+                    r = f.result()
+                    if r is not None:
+                        result = r
+                        logger.info("Movix │ found id=%d for title=%r", r, futs[f])
+                        for remaining in futs:
+                            remaining.cancel()
+                        break
+            if result is None:
+                logger.info("Movix │ no ID found for titles=%s", unique)
 
-        result: int | None = None
-        with ThreadPoolExecutor(max_workers=min(len(unique), 4)) as pool:
-            futs = {pool.submit(self._search_title, t, tmdb_id, imdb_id): t for t in unique}
-            for f in as_completed(futs):
-                r = f.result()
-                if r is not None:
-                    result = r
-                    logger.info("Movix │ found id=%d for title=%r", r, futs[f])
-                    for remaining in futs:
-                        remaining.cancel()
-                    break
-
-        if result is None:
-            logger.info("Movix │ no ID found for titles=%s", unique)
+        if len(_ID_CACHE) < _ID_CACHE_MAX:
+            _ID_CACHE[cache_key] = result
         return result
 
     def _search_title(

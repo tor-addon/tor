@@ -241,6 +241,7 @@ async def playback(b64_config: str, token: str, request: Request):
         "stream_type": stream_type,
         "infohash":    infohash,
         "is_library":  is_library,
+        "ad_id":       info.get("ai"),   # library magnet id
         "di":          info.get("di"),   # movix stream_id
         "dl":          info.get("dl"),   # wawacity links list
         "dh":          info.get("dh"),   # wawacity hosts list
@@ -304,13 +305,15 @@ def _format_stream(
     year        = stream.get("year")
     source      = stream.get("source", "?")
 
+    is_library = source == "Library"
     token = encode_playback_token(
         stream_type=stream_type,
         infohash=infohash,
         season=season,
         episode=episode,
         year=year,
-        is_library=(source == "Library"),
+        is_library=is_library,
+        ad_id=stream.get("ad_id")      if is_library else None,
         ddl_id=stream.get("ddl_id")    if stream_type == "ddl" else None,
         ddl_links=stream.get("ddl_links") if stream_type == "ddl" else None,
         ddl_hosts=stream.get("hosts")  if stream_type == "ddl" else None,
@@ -334,7 +337,6 @@ def _format_stream(
     hosts     = stream.get("hosts") or []
     audio_str = " ".join(audio[:2]) if audio else ""
 
-    is_library   = source == "Library"
     dot          = "🟣" if stream_type == "ddl" else "🔵"
     display_src  = "⚡️Library" if is_library else source
 

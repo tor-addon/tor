@@ -56,11 +56,9 @@ class _ColorFormatter(logging.Formatter):
 
 
 def setup_logging(level: str = "INFO") -> None:
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(_ColorFormatter(datefmt="%H:%M:%S"))
-
     root = logging.getLogger()
     root.setLevel(getattr(logging, level.upper(), logging.INFO))
-
-    if not root.handlers:
-        root.addHandler(handler)
+    root.handlers.clear()
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(_ColorFormatter(datefmt="%H:%M:%S"))
+    root.addHandler(handler)

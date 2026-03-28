@@ -42,14 +42,17 @@ def find_best_file(
         logger.debug("EpisodeSelector: single video fast-path → %s", videos[0]["n"])
         return videos[0]
 
+    # Parse all files once – reused by both _match_episode and _match_year
+    parsed_videos = [(f, parse_title(f["n"])) for f in videos]
+
     if season is not None and episode is not None:
-        match = _match_episode(videos, season, episode)
+        match = _match_episode(parsed_videos, season, episode)
         if match:
             logger.info("EpisodeSelector: S%02dE%02d → %s", season, episode, match["n"])
             return match
 
     if year is not None:
-        match = _match_year(videos, year)
+        match = _match_year(parsed_videos, year)
         if match:
             logger.info("EpisodeSelector: year=%d → %s", year, match["n"])
             return match
@@ -73,14 +76,19 @@ def _filter_videos(files: list[dict]) -> list[dict]:
     return result
 
 
-def _parse_file(f: dict) -> dict:
-    return parse_title(f["n"])
+def _natural_key(f: dict) -> list:
+    """Natural sort key: numeric parts compared as ints (avoids '10' < '2')."""
+    parts = re.split(r"(\d+)", f.get("n", ""))
+    return [int(p) if p.isdigit() else p.lower() for p in parts]
 
 
-def _match_episode(videos: list[dict], target_s: int, target_e: int) -> dict | None:
+def _match_episode(
+    parsed_videos: list[tuple[dict, dict]],
+    target_s: int,
+    target_e: int,
+) -> dict | None:
     season_candidates = []
-    for f in videos:
-        parsed = _parse_file(f)
+    for f, parsed in parsed_videos:
         file_s = parsed.get("seasons") or []
         file_e = parsed.get("episodes") or []
         if target_s in file_s and target_e in file_e:
@@ -89,10 +97,6 @@ def _match_episode(videos: list[dict], target_s: int, target_e: int) -> dict | N
             season_candidates.append(f)
 
     if season_candidates:
-        # Natural sort: "Episode 10" > "Episode 9" (avoids alphabetical 10 < 2)
-        def _natural_key(f: dict) -> list:
-            parts = re.split(r"(\d+)", f.get("n", ""))
-            return [int(p) if p.isdigit() else p.lower() for p in parts]
         season_candidates.sort(key=_natural_key)
         idx = target_e - 1
         if 0 <= idx < len(season_candidates):
@@ -100,8 +104,8 @@ def _match_episode(videos: list[dict], target_s: int, target_e: int) -> dict | N
     return None
 
 
-def _match_year(videos: list[dict], year: int) -> dict | None:
-    for f in videos:
-        if _parse_file(f).get("year") == year:
+def _match_year(parsed_videos: list[tuple[dict, dict]], year: int) -> dict | None:
+    for f, parsed in parsed_videos:
+        if parsed.get("year") == year:
             return f
     return None

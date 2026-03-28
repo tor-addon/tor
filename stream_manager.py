@@ -204,10 +204,15 @@ class StreamManager:
         return await self._resolve_torrent(stream, season, episode, year)
 
     async def _resolve_torrent(self, stream, season, episode, year) -> str | None:
-        delete_after = not stream.get("is_library", False)
+        ad_id = stream.get("ad_id")
+        if stream.get("is_library") and ad_id is not None:
+            return await asyncio.to_thread(
+                self._ad.resolve_library_stream,
+                ad_id, season, episode, year,
+            )
         return await asyncio.to_thread(
             self._ad.resolve_stream,
-            stream["infohash"], season, episode, year, delete_after,
+            stream["infohash"], season, episode, year,
         )
 
     async def _resolve_ddl(self, stream: dict) -> str | None:

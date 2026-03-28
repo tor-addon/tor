@@ -30,7 +30,7 @@ class StreamDeduplicator:
             return True
 
         is_library = stream.get("source") == "Library"
-        infohash   = stream.get("infohash") or stream.get("hash")
+        infohash   = stream.get("infohash")
 
         if infohash:
             h_key = str(infohash).lower()

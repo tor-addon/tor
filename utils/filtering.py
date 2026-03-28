@@ -146,8 +146,10 @@ class StreamFilter:
         if saved_episodes and not stream.get("episodes"):
             stream["episodes"] = saved_episodes
 
-        # Preserve original torrent_name and stream_type
-        stream["torrent_name"] = raw_title
+        # Preserve original torrent_name (PTT must not overwrite it with a parsed title)
+        # and ensure stream_type is set for torrent streams
+        if stream.get("torrent_name") != raw_title:
+            stream["torrent_name"] = raw_title
         if not stream.get("stream_type"):
             stream["stream_type"] = "torrent"
 
@@ -257,5 +259,6 @@ class StreamFilter:
             stream["quality"] = "WEB-DL"
 
         stream["valid"] = True
-        stream.pop("invalid_reason", None)
+        if "invalid_reason" in stream:
+            del stream["invalid_reason"]
         return True

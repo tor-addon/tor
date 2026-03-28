@@ -91,6 +91,7 @@ class LibraryClient:
             "title":        filename,
             "torrent_name": filename,
             "infohash":     h.upper(),
+            "ad_id":        magnet.get("id"),
             "source":       "Library",
             "stream_type":  "torrent",
             "cached":       True,

@@ -11,9 +11,10 @@ Flow:
     → AllDebrid.redirector_link(link) concurrently for all links
     → first success → AllDebrid.unlock_link(resolved) → CDN URL
 
-Filtering: DDL streams go through the same torrent filtering path (PTT + all checks).
-Pre-set only: languages (from page meta), year (scraped from HTML), seasons/episodes (series).
-PTT parses quality/resolution from torrent_name (filename or full h1 title).
+Optimizations vs prior version:
+  • All titles searched in parallel; first hit wins
+  • Already-fetched DOM is reused (season page not re-fetched for episode path)
+  • Duplicate links deduped in _rows_to_stream before building stream dict
 """
 
 import logging
@@ -32,20 +33,20 @@ _HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 
 # ── Language → ISO codes ──────────────────────────────────────────────────────
 _LANG_MAP: dict[str, list[str]] = {
-    "vf":             ["fr"],
-    "vff":            ["fr"],
-    "vfq":            ["fr"],
-    "french":         ["fr"],
-    "truefrench":     ["fr"],
-    "true french":    ["fr"],
-    "vostfr":         ["vostfr"],
-    "vost":           ["vostfr"],
-    "multi":          ["multi", "fr"],
-    "multi (french)": ["multi", "fr"],
-    "multi(french)":  ["multi", "fr"],
-    "multi (truefrench)": ["multi", "fr"],
-    "multi(truefrench)":  ["multi", "fr"],
-    "vo":             [],
+    "vf":                     ["fr"],
+    "vff":                    ["fr"],
+    "vfq":                    ["fr"],
+    "french":                 ["fr"],
+    "truefrench":             ["fr"],
+    "true french":            ["fr"],
+    "vostfr":                 ["vostfr"],
+    "vost":                   ["vostfr"],
+    "multi":                  ["multi", "fr"],
+    "multi (french)":         ["multi", "fr"],
+    "multi(french)":          ["multi", "fr"],
+    "multi (truefrench)":     ["multi", "fr"],
+    "multi(truefrench)":      ["multi", "fr"],
+    "vo":                     [],
 }
 
 _RE_EPISODE = re.compile(r'(?:épisode|episode)\s*(\d+)', re.IGNORECASE)
@@ -65,8 +66,6 @@ def _map_lang(raw: str) -> list[str]:
     if "vostfr" in normalized:
         return ["vostfr"]
     return ["fr"]
-
-
 
 
 def _abs(base: str, path: str) -> str:
@@ -95,19 +94,19 @@ class WawacityClient:
         season: int | None = None,
         episode: int | None = None,
     ) -> list[dict]:
-        title = titles[0] if titles else ""
-        if not title:
+        if not titles:
             return []
         try:
-            if is_serie:
-                streams = self._get_episode(title, season or 1, episode or 1)
-            else:
-                streams = self._get_movie(title)
+            streams = (
+                self._get_episode(titles, season or 1, episode or 1)
+                if is_serie
+                else self._get_movie(titles)
+            )
         except Exception as exc:
             logger.error("Wawacity │ get_streams error: %s", exc)
             return []
 
-        logger.info("Wawacity │ %d stream(s) for %r", len(streams), title)
+        logger.info("Wawacity │ %d stream(s) extracted", len(streams))
         return streams
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -122,12 +121,49 @@ class WawacityClient:
             logger.debug("Wawacity │ fetch error %s: %s", url[:60], e)
             return None
 
-    def _fetch_many(self, urls: set[str]) -> list[HTMLParser | None]:
-        if len(urls) == 1:
-            return [self._fetch(next(iter(urls)))]
-        with ThreadPoolExecutor(max_workers=min(len(urls), 8)) as pool:
-            futs = [pool.submit(self._fetch, u) for u in urls]
-            return [f.result() for f in as_completed(futs)]
+    def _fetch_many(self, urls: set[str] | list[str]) -> list[HTMLParser | None]:
+        urls_list = list(urls)
+        if not urls_list:
+            return []
+        if len(urls_list) == 1:
+            return [self._fetch(urls_list[0])]
+        with ThreadPoolExecutor(max_workers=min(len(urls_list), 8)) as pool:
+            futs = [pool.submit(self._fetch, u) for u in urls_list]
+            return [f.result() for f in futs]  # preserve input order
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Search helpers (parallel across titles)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _search_first(self, query: str, kind: str) -> str | None:
+        """Return URL of first search result. kind: 'films' | 'series'."""
+        dom = self._fetch(f"{self._base}/?p={kind}&search={quote_plus(query)}")
+        if not dom:
+            return None
+        items = dom.css("#wa-mid-blocks .wa-post-detail-item")
+        n = len(items)
+        logger.info("Wawacity │ %d result(s) for q=%r", n, query)
+        if not items:
+            return None
+        a = items[0].css_first(".wa-sub-block-title > a")
+        return _abs(self._base, a.attributes["href"]) if a else None
+
+    def _find_all_urls(self, titles: list[str], kind: str) -> set[str]:
+        """Search all titles in parallel; return ALL unique result URLs found."""
+        unique = list(dict.fromkeys(t for t in titles if t))
+        if not unique:
+            return set()
+        if len(unique) == 1:
+            url = self._search_first(unique[0], kind)
+            return {url} if url else set()
+        results: set[str] = set()
+        with ThreadPoolExecutor(max_workers=min(len(unique), 4)) as pool:
+            futs = [pool.submit(self._search_first, t, kind) for t in unique]
+            for f in as_completed(futs):
+                url = f.result()
+                if url:
+                    results.add(url)
+        return results
 
     # ─────────────────────────────────────────────────────────────────────────
     # Page metadata helpers
@@ -150,7 +186,6 @@ class WawacityClient:
                 qual = val
             elif tl.startswith("taille"):
                 size = _parse_size(val)
-        # Year from detail-list
         for li in dom.css("ul.detail-list li"):
             span = li.css_first("span")
             if span and "ann" in span.text(strip=True).lower():
@@ -164,22 +199,16 @@ class WawacityClient:
 
     @staticmethod
     def _page_h1(dom: HTMLParser) -> str:
-        """Return h1 text stripped of navigation prefix (e.g. 'Films » ')."""
         h1 = dom.css_first("h1")
         if not h1:
             return ""
         return _RE_NAV.sub("", h1.text(strip=True)).strip()
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Link-row extraction (movies + episodes)
+    # Link-row extraction
     # ─────────────────────────────────────────────────────────────────────────
 
     def _extract_link_row(self, row) -> dict | None:
-        """
-        Extract a single DDL link from a table row.
-        Returns None if the row is not a valid, allowed, single-file link.
-        Host: td[width="120px"]  |  Size: td[width="80px"]
-        """
         host_td = row.css_first('td[width="120px"]')
         if not host_td:
             return None
@@ -187,7 +216,6 @@ class WawacityClient:
         if host not in DDL_ALLOWED_HOSTS:
             return None
 
-        # Size is in the 80px column (separate from host)
         size_td  = row.css_first('td[width="80px"]')
         row_size = _parse_size(size_td.text(strip=True)) if size_td else 0
 
@@ -195,7 +223,6 @@ class WawacityClient:
         if not a:
             return None
 
-        # Skip multi-part file rows ("Partie N:")
         b_tag = a.css_first("b")
         if b_tag and _RE_PARTIE.search(b_tag.text(strip=True)):
             return None
@@ -204,20 +231,14 @@ class WawacityClient:
         if not href:
             return None
 
-        # Extract filename from link text (after the bold label)
-        fn = ""
+        fn        = ""
         full_text = a.text(strip=True)
         b_text    = b_tag.text(strip=True) if b_tag else ""
         candidate = full_text.replace(b_text, "").strip()
         if _RE_EXT.search(candidate):
             fn = candidate
 
-        return {
-            "link":     _abs(self._base, href),
-            "host":     host_td.text(strip=True),
-            "filename": fn,
-            "size":     row_size,
-        }
+        return {"link": _abs(self._base, href), "host": host_td.text(strip=True), "filename": fn, "size": row_size}
 
     def _rows_to_stream(
         self,
@@ -230,33 +251,29 @@ class WawacityClient:
         season: int | None,
         episode: int | None,
     ) -> dict | None:
-        """Build a single stream dict from a set of DDL table rows (one quality variant)."""
-        links:    list[str] = []
-        hosts:    list[str] = []
-        filename: str       = ""
-        row_size: int       = 0
+        links:      list[str] = []
+        hosts:      list[str] = []
+        seen:       set[str]  = set()   # deduplicate links before building stream
+        filename:   str       = ""
+        row_size:   int       = 0
 
         for row in rows:
             info = self._extract_link_row(row)
-            if not info:
+            if not info or info["link"] in seen:
                 continue
+            seen.add(info["link"])
             links.append(info["link"])
             hosts.append(info["host"])
             if not filename and info["filename"]:
                 filename = info["filename"]
-            if not row_size and info.get("size"):
+            if not row_size and info["size"]:
                 row_size = info["size"]
 
         if not links:
             return None
 
-        # torrent_name: filename (ideal for PTT quality parsing) else full h1 title
-        torrent_name = filename or h1_title
-        # Size: prefer page-level (movies), fall back to row-level (series)
-        final_size   = size if size > 0 else row_size
-
         stream: dict = {
-            "torrent_name": torrent_name,
+            "torrent_name": filename or h1_title,
             "infohash":     "",
             "ddl_links":    links,
             "source":       "Wawacity",
@@ -264,49 +281,56 @@ class WawacityClient:
             "cached":       True,
             "languages":    _map_lang(language),
             "year":         year,
-            "size":         final_size,
+            "size":         size if size > 0 else row_size,
             "hosts":        hosts,
         }
-
         if is_serie and season is not None:
             stream["seasons"]  = [season]
         if is_serie and episode is not None:
             stream["episodes"] = [episode]
-
-
         return stream
 
     # ─────────────────────────────────────────────────────────────────────────
     # Movie
     # ─────────────────────────────────────────────────────────────────────────
 
-    def _get_movie(self, query: str) -> list[dict]:
-        dom = self._fetch(f"{self._base}/?p=films&search={quote_plus(query)}")
-        if not dom:
-            return []
-        first = dom.css_first("#wa-mid-blocks .wa-post-detail-item .wa-sub-block-title > a")
-        if not first:
+    def _get_movie(self, titles: list[str]) -> list[dict]:
+        # Step 1: search all titles in parallel → all unique result URLs
+        result_urls = self._find_all_urls(titles, "films")
+        if not result_urls:
             return []
 
-        base_url = _abs(self._base, first.attributes["href"])
-        base_dom = self._fetch(base_url)
-        if not base_dom:
+        # Step 2: fetch all result pages in parallel
+        result_list = list(result_urls)
+        fetched: dict[str, HTMLParser] = {}
+        for url, dom in zip(result_list, self._fetch_many(result_list)):
+            if dom:
+                fetched[url] = dom
+
+        if not fetched:
             return []
 
-        # Collect all quality-variant pages
-        urls: set[str] = {base_url}
-        for a in base_dom.css('a[href^="?p=film&id="]'):
-            if a.css_first("button"):
-                urls.add(_abs(self._base, a.attributes["href"]))
+        # Step 3: collect all quality-variant URLs from all result pages (deduped)
+        variant_urls: set[str] = set(fetched.keys())
+        for dom in fetched.values():
+            for a in dom.css('a[href^="?p=film&id="]'):
+                if a.css_first("button"):
+                    variant_urls.add(_abs(self._base, a.attributes["href"]))
 
+        # Step 4: fetch only the new variant URLs (reuse already-fetched pages)
+        new_urls = variant_urls - set(fetched.keys())
+        all_pages: list[HTMLParser] = list(fetched.values())
+        for dom in self._fetch_many(new_urls):
+            if dom:
+                all_pages.append(dom)
+
+        # Step 5: extract one stream per page
         out: list[dict] = []
-        for page in self._fetch_many(urls):
-            if not page:
-                continue
-            h1_title          = self._page_h1(page)
+        for page in all_pages:
+            h1                = self._page_h1(page)
             lang, _, size, yr = self._page_info(page)
             rows              = page.css("#DDLLinks tr.link-row")
-            s = self._rows_to_stream(rows, h1_title, lang, size, yr, False, None, None)
+            s = self._rows_to_stream(rows, h1, lang, size, yr, False, None, None)
             if s:
                 out.append(s)
         return out
@@ -315,41 +339,14 @@ class WawacityClient:
     # Episode
     # ─────────────────────────────────────────────────────────────────────────
 
-    def _season_url(self, query: str, season: int) -> str | None:
-        dom = self._fetch(f"{self._base}/?p=series&search={quote_plus(query)}")
-        if not dom:
-            return None
-        first = dom.css_first("#wa-mid-blocks .wa-post-detail-item .wa-sub-block-title > a")
-        if not first:
-            return None
-        url = _abs(self._base, first.attributes["href"])
-        dom = self._fetch(url)
-        if not dom:
-            return None
-        h1 = dom.css_first("h1")
-        if h1:
-            m = re.search(r'Saison\s*(\d+)', h1.text(), re.IGNORECASE)
-            if m and int(m.group(1)) != season:
-                for a in dom.css(".wa-sub-block ul.wa-post-list-ofLinks li a"):
-                    if f"Saison {season}" in a.text():
-                        return _abs(self._base, a.attributes["href"])
-                return None
-        return url
-
-    def _ep_streams_from_dom(
-        self,
-        dom: HTMLParser,
-        season: int,
-        episode: int,
-    ) -> list[dict]:
+    def _ep_streams_from_dom(self, dom: HTMLParser, season: int, episode: int) -> list[dict]:
         table = dom.css_first("#DDLLinks")
         if not table:
             return []
 
-        h1_title          = self._page_h1(dom)
+        h1                = self._page_h1(dom)
         lang, _, size, yr = self._page_info(dom)
 
-        # Collect rows belonging to the target episode
         cur_ep, ep_rows = None, []
         for row in table.css("tr"):
             cls = row.attributes.get("class", "")
@@ -361,28 +358,62 @@ class WawacityClient:
 
         if not ep_rows:
             return []
-
-        s = self._rows_to_stream(ep_rows, h1_title, lang, size, yr, True, season, episode)
+        s = self._rows_to_stream(ep_rows, h1, lang, size, yr, True, season, episode)
         return [s] if s else []
 
-    def _get_episode(self, query: str, season: int, episode: int) -> list[dict]:
-        season_url = self._season_url(query, season)
-        if not season_url:
-            return []
-        dom = self._fetch(season_url)
-        if not dom:
+    def _get_episode(self, titles: list[str], season: int, episode: int) -> list[dict]:
+        # Step 1: search all titles in parallel → all unique series URLs
+        series_urls = self._find_all_urls(titles, "series")
+        if not series_urls:
             return []
 
-        # Collect all language-variant pages for the same season
-        urls: set[str] = {season_url}
-        for block in dom.css(".wa-sub-block"):
-            t = block.css_first(".wa-sub-block-title")
-            if t and "Autres langues" in t.text():
-                for a in block.css("ul.wa-post-list-ofLinks li a"):
-                    urls.add(_abs(self._base, a.attributes["href"]))
+        # Step 2: fetch all series pages in parallel
+        series_list = list(series_urls)
+        fetched_series: dict[str, HTMLParser] = {}
+        for url, dom in zip(series_list, self._fetch_many(series_list)):
+            if dom:
+                fetched_series[url] = dom
 
+        # Step 3: for each series page, find the correct season URL
+        season_urls_needed: set[str] = set()
+        season_doms: dict[str, HTMLParser] = {}
+
+        for series_url, dom in fetched_series.items():
+            h1 = dom.css_first("h1")
+            if h1:
+                m = re.search(r'Saison\s*(\d+)', h1.text(), re.IGNORECASE)
+                if m and int(m.group(1)) != season:
+                    for a in dom.css(".wa-sub-block ul.wa-post-list-ofLinks li a"):
+                        if f"Saison {season}" in a.text():
+                            season_urls_needed.add(_abs(self._base, a.attributes["href"]))
+                            break
+                    continue
+            season_doms[series_url] = dom
+
+        # Fetch missing season pages (deduped by set)
+        needed_list = list(season_urls_needed)
+        for url, dom in zip(needed_list, self._fetch_many(needed_list)):
+            if dom:
+                season_doms[url] = dom
+
+        if not season_doms:
+            return []
+
+        # Step 4: collect all language-variant URLs from all season pages (deduped)
+        lang_urls: set[str] = set(season_doms.keys())
+        for dom in season_doms.values():
+            for block in dom.css(".wa-sub-block"):
+                t = block.css_first(".wa-sub-block-title")
+                if t and "Autres langues" in t.text():
+                    for a in block.css("ul.wa-post-list-ofLinks li a"):
+                        lang_urls.add(_abs(self._base, a.attributes["href"]))
+
+        # Step 5: reuse season_doms, fetch only extra language variants
         out: list[dict] = []
-        for page in self._fetch_many(urls):
+        for dom in season_doms.values():
+            out.extend(self._ep_streams_from_dom(dom, season, episode))
+
+        for page in self._fetch_many(lang_urls - set(season_doms.keys())):
             if page:
                 out.extend(self._ep_streams_from_dom(page, season, episode))
         return out

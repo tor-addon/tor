@@ -15,7 +15,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from router import router
@@ -51,7 +51,6 @@ except Exception:
 async def silence_access_logs(request: Request, call_next):
     # Stremio sends HEAD requests for connectivity checks – return 200 silently
     if request.method == "HEAD":
-        from fastapi.responses import Response
         return Response(status_code=200)
     return await call_next(request)
 

@@ -22,15 +22,13 @@ TMDB_DEFAULT_KEY = (
 )
 
 # ── Movix ─────────────────────────────────────────────────────────────────────
-MOVIX_API_BASE_URL    = "https://api.movix.blog/api"
-MOVIX_DECODE_BASE_URL = MOVIX_API_BASE_URL + "/darkiworld/decode"
-MOVIX_REFERER         = "https://movix.rodeo"
+MOVIX_DECODE_BASE_URL = "https://api.movix.blog/api/darkiworld/decode"
 MOVIX_ORIGIN          = "https://movix.rodeo"
 
 DARKIWORLD_API_BASE_URL = "https://darkiworld2026.com/api/v1"
 
 # ── Wawacity ──────────────────────────────────────────────────────────────────
-WAWACITY_BASE_URL = "https://www.wawacity.golf"
+WAWACITY_BASE_URL = "https://www.wawacity.pizza"
 
 # ── Pipeline defaults ─────────────────────────────────────────────────────────
 DEFAULT_LANGUAGES      = ["fr"]   # list – can include "fr", "multi", "vostfr"
@@ -42,7 +40,7 @@ ALLDEBRID_BATCH_SIZE   = 80
 # ── Addon metadata ────────────────────────────────────────────────────────────
 ADDON_ID          = "community.stremio-tor"
 ADDON_NAME        = "Tor"
-ADDON_VERSION     = "1.0.3"
+ADDON_VERSION     = "1.0.4"
 ADDON_DESCRIPTION = "Stremio Optimized +5 Torrent Source, +2 DDL Source, Alldebrid Support  │ By Adam!"
 ADDON_LOGO        = "https://images.icon-icons.com/2552/PNG/512/tor_alpha_browser_logo_icon_152957.png"
 LOG_LEVEL         = os.environ.get("LOG_LEVEL", "INFO")

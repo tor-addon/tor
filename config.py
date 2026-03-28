@@ -98,6 +98,7 @@ def encode_playback_token(
     episode: int | None = None,
     year: int | None = None,
     is_library: bool = False,
+    ad_id: int | None = None,
     ddl_id: int | None = None,
     ddl_links: list[str] | None = None,
     ddl_hosts: list[str] | None = None,
@@ -108,6 +109,7 @@ def encode_playback_token(
     if episode    is not None: payload["e"]  = episode
     if year       is not None: payload["y"]  = year
     if is_library:             payload["lb"] = 1
+    if ad_id      is not None: payload["ai"] = ad_id
     if ddl_id     is not None: payload["di"] = ddl_id
     if ddl_links:              payload["dl"] = ddl_links
     if ddl_hosts:              payload["dh"] = ddl_hosts

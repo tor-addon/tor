@@ -3,19 +3,14 @@ services/alldebrid.py
 ─────────────────────
 AllDebrid API client. Synchronous – call via asyncio.to_thread().
 
-  check_cache(torrents)      – batch instant-availability check
-  resolve_stream(...)        – torrent → file tree → direct URL → delete magnet
-  unlock_link(link)          – any direct link (1fichier…) → streaming URL
+  check_cache(torrents)         – batch instant-availability check (upload → mark ready → delete)
+  resolve_stream(...)           – upload hash → file tree → pick best file → CDN URL → delete
+  resolve_library_stream(...)  – existing library magnet id → file tree → CDN URL (no upload, no delete)
+  unlock_link(link)             – any direct link (1fichier…) → streaming URL
 
 Retry policy: network errors (ConnectionError, Timeout) are retried up to
 2 times with a 500 ms delay. Logic errors (bad API key, hash invalid…) are
 not retried.
-
-Delete after resolve:
-  After a magnet is resolved and the CDN link is unlocked, we delete it from
-  AllDebrid. The CDN URL is independent of the magnet entry – deleting does NOT
-  cut an in-progress stream. Pass delete_after=False to skip deletion (Library
-  streams must not be removed from the user's library).
 """
 
 import logging
@@ -106,18 +101,11 @@ class AllDebridClient:
         season: int | None = None,
         episode: int | None = None,
         year: int | None = None,
-        delete_after: bool = True,
     ) -> str | None:
-        """
-        upload magnet → walk file tree → pick best file → unlock → URL.
-        If delete_after=True, the magnet is removed from AllDebrid once the
-        CDN link is obtained (the stream keeps playing – the CDN URL is
-        independent of the library entry).
-        Pass delete_after=False for Library streams to preserve the user's library.
-        """
+        """Upload magnet → walk file tree → pick best file → unlock → URL → delete magnet."""
         logger.info(
-            "AllDebrid │ resolve  hash=%s…  s=%s e=%s year=%s  delete=%s",
-            info_hash[:12], season, episode, year, delete_after,
+            "AllDebrid │ resolve  hash=%s…  s=%s e=%s year=%s",
+            info_hash[:12], season, episode, year,
         )
         magnet_id: int | None = None
         try:
@@ -140,8 +128,32 @@ class AllDebridClient:
             logger.info("AllDebrid │ selected → %s (%.2f GB)", best["n"], best.get("s", 0) / 1e9)
             return self._unlock(best["l"])
         finally:
-            if delete_after and magnet_id is not None:
+            if magnet_id is not None:
                 self._delete_magnet(magnet_id)
+
+    def resolve_library_stream(
+        self,
+        magnet_id: int,
+        season: int | None = None,
+        episode: int | None = None,
+        year: int | None = None,
+    ) -> str | None:
+        """Resolve an existing library magnet directly – no upload, no deletion."""
+        logger.info(
+            "AllDebrid │ library resolve  id=%s  s=%s e=%s year=%s",
+            magnet_id, season, episode, year,
+        )
+        raw_files = self._fetch_files(magnet_id)
+        if raw_files is None:
+            return None
+        flat = _flatten_tree(raw_files)
+        logger.debug("AllDebrid │ %d file(s) in torrent", len(flat))
+        best = find_best_file(flat, season=season, episode=episode, year=year)
+        if best is None:
+            logger.warning("AllDebrid │ no matching file found")
+            return None
+        logger.info("AllDebrid │ selected → %s (%.2f GB)", best["n"], best.get("s", 0) / 1e9)
+        return self._unlock(best["l"])
 
     # ─────────────────────────────────────────────────────────────────────────
     # DDL unlock
