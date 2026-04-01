@@ -32,7 +32,10 @@ class UserConfig:
     remove_non_tv:     bool       = True
     enable_wawacity:      bool       = False
     wawacity_url:         str        = ""
+    enable_torrent9:      bool       = True
+    torrent9_url:         str        = ""
     allowed_resolutions:  list[str]  = field(default_factory=list)
+    exit_condition:       str        = ""
 
     def encode(self) -> str:
         payload = {
@@ -49,7 +52,10 @@ class UserConfig:
             "nt": self.remove_non_tv,
             "ew": self.enable_wawacity,
             "wu": self.wawacity_url,
+            "e9": self.enable_torrent9,
+            "t9": self.torrent9_url,
             "ar": self.allowed_resolutions,
+            "ec": self.exit_condition,
         }
         raw = json.dumps(payload, separators=(",", ":"))
         return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
@@ -84,7 +90,10 @@ class UserConfig:
                 remove_non_tv    = bool(data.get("nt", True)),
                 enable_wawacity     = bool(data.get("ew", False)),
                 wawacity_url        = data.get("wu", ""),
+                enable_torrent9     = bool(data.get("e9", True)),
+                torrent9_url        = data.get("t9", ""),
                 allowed_resolutions = data.get("ar", []),
+                exit_condition      = data.get("ec", ""),
             )
         except Exception as exc:
             logger.warning("Config decode error: %s – using defaults", exc)

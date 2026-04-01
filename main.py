@@ -27,6 +27,8 @@ logger = logging.getLogger(__name__)
 
 # Silence uvicorn access log (hides the long base64 URLs)
 logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+# Silence httpx HTTP request logs
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 app = FastAPI(title=ADDON_NAME, docs_url=None, redoc_url=None)
 

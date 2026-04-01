@@ -42,8 +42,9 @@ _CORS = {
     "Access-Control-Allow-Headers": "*",
 }
 
-# ── Configure HTML (read once at startup) ────────────────────────────────────────
-_CONFIGURE_HTML: str = (Path(__file__).parent / "static" / "configure.html").read_text(encoding="utf-8")
+# ── Static HTML pages (read once at startup) ─────────────────────────────────────
+_CONFIGURE_HTML: str   = (Path(__file__).parent / "static" / "configure.html").read_text(encoding="utf-8")
+_EXIT_COND_DOCS: str   = (Path(__file__).parent / "static" / "exit_condition_docs.html").read_text(encoding="utf-8")
 
 # ── StreamManager pool ──────────────────────────────────────────────────────────
 _managers: dict[str, StreamManager] = {}
@@ -64,7 +65,10 @@ def _get_manager(config: UserConfig) -> StreamManager:
             remove_non_tv=config.remove_non_tv,
             enable_wawacity=config.enable_wawacity,
             wawacity_url=config.wawacity_url,
+            enable_torrent9=config.enable_torrent9,
+            torrent9_url=config.torrent9_url,
             allowed_resolutions=config.allowed_resolutions,
+            exit_condition=config.exit_condition,
         )
     return _managers[key]
 
@@ -119,6 +123,11 @@ async def root():
 @router.get("/configure", response_class=HTMLResponse)
 async def configure_page():
     return _CONFIGURE_HTML
+
+
+@router.get("/static/exit_condition_docs.html", response_class=HTMLResponse)
+async def exit_condition_docs():
+    return _EXIT_COND_DOCS
 
 
 @router.get("/{b64_config}/configure", response_class=HTMLResponse)
@@ -380,10 +389,10 @@ def _format_stream(
         right_parts = [p for p in [resolution, size_fmt] if p]
         description = " • ".join(right_parts)
 
-    group_key = resolution if resolution != "?" else (quality or "x")
+    binge_key = infohash if infohash else f"{source}-{resolution}"
     behavior_hints: dict = {
         "notWebReady": True,
-        "bingeGroup":  f"{ADDON_ID}-{group_key}",
+        "bingeGroup":  f"tor-{binge_key}",
     }
 
     if size_bytes > 0:

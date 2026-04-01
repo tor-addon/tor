@@ -1,60 +1,54 @@
 """
 services/library.py
 ───────────────────
-AllDebrid Library source client.
-Synchronous – call via asyncio.to_thread().
+AllDebrid Library source. Asynchronous.
 
 Fetches all Ready magnets from the user's AllDebrid library (v4.1 API).
-Each magnet is converted to a pipeline-compatible stream dict (stream_type=torrent,
-cached=True) so it passes through the normal Filter → Rank pipeline.
-
-Results are cached for 15 s (TTL) to match the stream pipeline dedup window.
-Resolution works identically to a regular torrent: infohash → resolve_stream().
+Results are cached for _CACHE_TTL seconds (matches stream pipeline dedup window).
+Streams are pre-cached (cached=True) and pass directly to ranking.
 """
 
 import logging
 import time
 
-import requests
+import httpx
 
 from settings import ALLDEBRID_V41_BASE_URL
 
 logger = logging.getLogger(__name__)
 
 _READY_STATUS = "Ready"
-_CACHE_TTL    = 15.0   # seconds
+_CACHE_TTL    = 15.0
 
 
 class LibraryClient:
-    __slots__ = ("api_key", "session", "_cache", "_cache_ts")
+    __slots__ = ("api_key", "client", "_cache", "_cache_ts")
 
     def __init__(self, api_key: str) -> None:
         self.api_key   = api_key
-        self.session   = requests.Session()
+        self.client    = httpx.AsyncClient(
+            limits=httpx.Limits(max_connections=4, max_keepalive_connections=2),
+            timeout=15,
+        )
         self._cache:    list[dict] | None = None
         self._cache_ts: float             = 0.0
 
-    def get_streams(self) -> list[dict]:
-        """
-        Returns pipeline-compatible stream dicts for all Ready magnets.
-        Results are cached for 15 s (same window as the stream pipeline).
-        """
+    async def get_streams(self) -> list[dict]:
         now = time.monotonic()
         if self._cache is not None and (now - self._cache_ts) < _CACHE_TTL:
             logger.info("Library │ cache HIT (%d streams)", len(self._cache))
             return self._cache
 
         try:
-            r = self.session.post(
+            r = await self.client.post(
                 f"{ALLDEBRID_V41_BASE_URL}/magnet/status",
                 headers={"Authorization": f"Bearer {self.api_key}"},
-                timeout=15,
             )
             r.raise_for_status()
             body = r.json()
         except Exception as exc:
             logger.error("Library │ request failed: %s", exc)
-            return self._cache or []   # stale cache is better than nothing
+            return self._cache or []
 
         if body.get("status") != "success":
             logger.warning("Library │ API error: %s", body.get("error", {}))
@@ -69,7 +63,6 @@ class LibraryClient:
         return streams
 
     def invalidate_cache(self) -> None:
-        """Force next call to re-fetch (e.g. after the user uploads a new magnet)."""
         self._cache    = None
         self._cache_ts = 0.0
 
@@ -84,8 +77,8 @@ class LibraryClient:
         except (ValueError, TypeError):
             size = 0
 
-        gb = size / (1 << 30)
-        size_fmt = f"{gb:.2f} GB" if gb >= 1 else f"{size / (1 << 20):.0f} MB"
+        gb       = size / (1 << 30)
+        size_fmt = f"{gb:.2f} GB" if gb >= 1 else f"{size >> 20} MB"
 
         return {
             "title":        filename,
@@ -101,4 +94,4 @@ class LibraryClient:
         }
 
     def close(self) -> None:
-        self.session.close()
+        pass

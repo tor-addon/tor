@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Condition d'arrêt — Documentation</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+    :root {
+      --bg:      #09090f;
+      --s1:      #0e0f18;
+      --s2:      #13141f;
+      --s3:      #191a2e;
+      --border:  #1c1d2e;
+      --border2: #252640;
+      --accent:  #6c63ff;
+      --accent2: #a78bfa;
+      --accentd: rgba(108,99,255,.12);
+      --text:    #eef0ff;
+      --text2:   #9396b8;
+      --text3:   #5a5d82;
+      --green:   #4ade80;
+      --greend:  rgba(74,222,128,.1);
+      --amber:   #fbbf24;
+      --amberd:  rgba(251,191,36,.1);
+      --blue:    #60a5fa;
+      --blued:   rgba(96,165,250,.1);
+      --red:     #f87171;
+      --redd:    rgba(248,113,113,.1);
+      --r: 10px; --rs: 6px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg); color: var(--text);
+      font-family: 'Inter', system-ui, sans-serif;
+      font-size: 14px; line-height: 1.65;
+      padding-bottom: 80px;
+    }
+
+    /* Layout */
+    .layout {
+      display: grid; grid-template-columns: 210px 1fr;
+      max-width: 1060px; margin: 0 auto; padding: 0 20px;
+    }
+    @media (max-width: 720px) {
+      .layout { grid-template-columns: 1fr; }
+      .sidebar { display: none; }
+    }
+
+    /* Sidebar */
+    .sidebar {
+      padding: 32px 0 0; position: sticky; top: 0;
+      height: 100vh; overflow-y: auto;
+      border-right: 1px solid var(--border);
+    }
+    .sidebar-group {
+      font-size: 10px; font-weight: 700; letter-spacing: 1px;
+      text-transform: uppercase; color: var(--text3);
+      padding: 0 18px; margin: 18px 0 5px;
+    }
+    .sidebar-group:first-child { margin-top: 0; }
+    .sidebar a {
+      display: block; padding: 5px 18px; font-size: 13px;
+      color: var(--text2); text-decoration: none; transition: color .12s, background .12s;
+    }
+    .sidebar a:hover { color: var(--text); background: var(--s2); }
+    .sidebar a.active { color: var(--accent2); }
+
+    /* Content */
+    .content { padding: 36px 0 36px 44px; min-width: 0; }
+
+    /* Sections */
+    .section { margin-bottom: 48px; }
+    .section-title {
+      font-size: 19px; font-weight: 700; letter-spacing: -.3px;
+      margin-bottom: 4px; display: flex; align-items: center; gap: 10px;
+    }
+    .icon {
+      width: 28px; height: 28px; border-radius: 7px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 13px; flex-shrink: 0;
+    }
+    .section-lead {
+      color: var(--text2); margin-bottom: 16px; font-size: 13.5px; line-height: 1.75;
+    }
+    hr.div { border: none; border-top: 1px solid var(--border); margin: 0 0 18px; }
+
+    /* Cards */
+    .card {
+      background: var(--s1); border: 1px solid var(--border);
+      border-radius: var(--r); overflow: hidden; margin-bottom: 10px;
+    }
+    .card-head {
+      padding: 12px 16px; border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    }
+    .card-head code { font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 500; color: var(--accent2); }
+    .card-head .note { font-size: 12px; color: var(--text3); }
+    .card-body { padding: 13px 16px; }
+    .card-body p { color: var(--text2); line-height: 1.7; margin-bottom: 8px; }
+    .card-body p:last-child { margin-bottom: 0; }
+
+    /* Tables */
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th {
+      text-align: left; font-size: 10px; font-weight: 700; letter-spacing: .6px;
+      text-transform: uppercase; color: var(--text3);
+      padding: 8px 12px; border-bottom: 1px solid var(--border);
+    }
+    td { padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+    tr:last-child td { border-bottom: none; }
+    td.mono { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--accent2); white-space: nowrap; }
+    td.desc { color: var(--text2); }
+    td.rank { color: var(--amber); font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+    tr:hover td { background: var(--s2); }
+
+    /* Code */
+    .code {
+      background: var(--s2); border: 1px solid var(--border2);
+      border-radius: var(--r); overflow: hidden; margin: 10px 0;
+    }
+    .code-lbl {
+      padding: 6px 14px; font-size: 10px; font-weight: 700; letter-spacing: .6px;
+      text-transform: uppercase; color: var(--text3);
+      background: var(--s3); border-bottom: 1px solid var(--border);
+    }
+    .code-body {
+      padding: 13px 15px; font-family: 'JetBrains Mono', monospace;
+      font-size: 12.5px; line-height: 1.9; overflow-x: auto; white-space: pre;
+    }
+    code {
+      font-family: 'JetBrains Mono', monospace; font-size: 12px;
+      background: var(--s3); color: var(--accent2);
+      padding: 1px 5px; border-radius: 4px; border: 1px solid var(--border2);
+    }
+
+    /* Syntax colours */
+    .kw  { color: #c084fc; }
+    .fn  { color: #60a5fa; }
+    .str { color: #86efac; }
+    .num { color: #fbbf24; }
+    .op  { color: #f87171; }
+    .id  { color: #a78bfa; }
+    .cm  { color: #3d4060; }
+
+    /* Examples */
+    .examples { display: grid; gap: 10px; }
+    .ex { background: var(--s2); border: 1px solid var(--border2); border-radius: var(--r); overflow: hidden; }
+    .ex-head {
+      padding: 8px 14px; background: var(--s3); border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: 8px;
+    }
+    .ex-lbl { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; color: var(--text3); }
+    .tag {
+      font-size: 10px; font-weight: 600; padding: 1px 7px;
+      border-radius: 99px; letter-spacing: .3px; white-space: nowrap;
+    }
+    .tag-speed   { background: var(--amberd); color: var(--amber); border: 1px solid rgba(251,191,36,.25); }
+    .tag-quality { background: var(--blued);  color: var(--blue);  border: 1px solid rgba(96,165,250,.25); }
+    .tag-lang    { background: var(--greend); color: var(--green); border: 1px solid rgba(74,222,128,.25); }
+    .tag-mixed   { background: var(--accentd);color: var(--accent2);border: 1px solid rgba(167,139,250,.25); }
+    .ex-code {
+      padding: 12px 15px; font-family: 'JetBrains Mono', monospace;
+      font-size: 12.5px; overflow-x: auto; white-space: nowrap;
+    }
+    .ex-desc { padding: 0 15px 11px; font-size: 12px; color: var(--text2); line-height: 1.6; }
+
+    /* Ladder */
+    .ladder { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 10px 0; }
+    .lval {
+      font-family: 'JetBrains Mono', monospace; font-size: 11px;
+      padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border2);
+      background: var(--s2); color: var(--text2);
+    }
+    .lval.best { background: var(--accentd); border-color: rgba(108,99,255,.3); color: var(--accent2); }
+    .larr { color: var(--text3); font-size: 14px; }
+
+    /* Info boxes */
+    .box { border-radius: var(--rs); padding: 11px 15px; margin: 12px 0; font-size: 13px; line-height: 1.6; }
+    .box.note { background: var(--blued);  border-left: 3px solid var(--blue);  color: var(--blue); }
+    .box.tip  { background: var(--greend); border-left: 3px solid var(--green); color: var(--green); }
+    .box.warn { background: var(--amberd); border-left: 3px solid var(--amber); color: var(--amber); }
+
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
+  </style>
+</head>
+<body>
+
+<div class="layout">
+  <nav class="sidebar">
+    <div class="sidebar-group">Principe</div>
+    <a href="#principe">Comment ça marche</a>
+
+    <div class="sidebar-group">Ce que vous pouvez mesurer</div>
+    <a href="#compteurs">Compteurs simples</a>
+    <a href="#delay">Délai (timeout)</a>
+    <a href="#filtres">Filtrer par critère</a>
+
+    <div class="sidebar-group">Critères disponibles</div>
+    <a href="#resolution">Résolution</a>
+    <a href="#qualite">Qualité source</a>
+    <a href="#langue">Langue</a>
+
+    <div class="sidebar-group">Exemples</div>
+    <a href="#ex-rapide">Arrêt rapide</a>
+    <a href="#ex-qualite">Qualité</a>
+    <a href="#ex-langue">Langue</a>
+    <a href="#ex-combines">Combinés</a>
+  </nav>
+
+  <main class="content">
+
+    <!-- Principe -->
+    <section class="section" id="principe">
+      <div class="section-title">
+        <div class="icon" style="background:var(--accentd)">⚡</div>
+        Comment ça marche
+      </div>
+      <hr class="div"/>
+      <p class="section-lead">
+        La recherche interroge toutes vos sources en parallèle. Par défaut, elle attend que
+        <strong style="color:var(--text)">toutes les sources aient répondu</strong> avant d'afficher les résultats.
+      </p>
+      <p class="section-lead">
+        La condition d'arrêt vous permet de stopper plus tôt : dès qu'elle est satisfaite,
+        la recherche s'arrête immédiatement — toutes les sources encore en cours sont annulées —
+        et affiche ce qui a déjà été trouvé. Laissez le champ vide pour ne pas l'utiliser.
+      </p>
+    </section>
+
+    <!-- Compteurs simples -->
+    <section class="section" id="compteurs">
+      <div class="section-title">
+        <div class="icon" style="background:var(--amberd)">📊</div>
+        Compteurs simples
+      </div>
+      <hr class="div"/>
+      <p class="section-lead">
+        Ces mots-clés représentent directement un nombre. Comparez-les à un chiffre avec <code>&gt;=</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&lt;</code>, <code>=</code>.
+      </p>
+      <div class="card">
+        <table>
+          <thead><tr><th>Mot-clé</th><th>Ce que ça compte</th><th>Exemple</th></tr></thead>
+          <tbody>
+            <tr>
+              <td class="mono">streams</td>
+              <td class="desc">Streams en cache disponibles — vérifiés et immédiatement jouables sur AllDebrid</td>
+              <td class="desc"><code>streams >= 5</code></td>
+            </tr>
+            <tr>
+              <td class="mono">torrent</td>
+              <td class="desc">Streams de type torrent (Torznab, Torrent9, Library) disponibles en cache</td>
+              <td class="desc"><code>torrent >= 3</code></td>
+            </tr>
+            <tr>
+              <td class="mono">ddl</td>
+              <td class="desc">Liens directs (Movix, Wawacity) — toujours disponibles</td>
+              <td class="desc"><code>ddl >= 1</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="code">
+        <div class="code-lbl">Exemples</div>
+        <div class="code-body"><span class="id">streams</span> <span class="op">>=</span> <span class="num">5</span>             <span class="cm"># arrêter quand 5 streams sont en cache</span>
+<span class="id">streams</span> <span class="op">>=</span> <span class="num">3</span> <span class="kw">or</span> <span class="id">ddl</span> <span class="op">>=</span> <span class="num">1</span>   <span class="cm"># 3 torrents en cache OU 1 lien direct trouvé</span>
+<span class="id">ddl</span> <span class="op">>=</span> <span class="num">1</span>               <span class="cm"># dès qu'un lien direct est trouvé</span></div>
+      </div>
+    </section>
+
+    <!-- Délai -->
+    <section class="section" id="delay">
+      <div class="section-title">
+        <div class="icon" style="background:var(--redd)">⏱️</div>
+        Délai — timeout
+      </div>
+      <hr class="div"/>
+      <p class="section-lead">
+        <code>delay</code> représente le nombre de <strong style="color:var(--text)">secondes écoulées</strong> depuis le début de la recherche.
+        Utilisez-le pour forcer un arrêt après un certain temps.
+      </p>
+      <div class="box warn">
+        <strong>Attention :</strong> Pour attendre <em>N</em> secondes, utilisez <code>delay >= N</code> — pas <code>delay &lt;= N</code>.
+        <br><code>delay &lt;= 3</code> serait vrai dès la première seconde et stopperait immédiatement la recherche.
+      </div>
+      <div class="code">
+        <div class="code-lbl">Exemples</div>
+        <div class="code-body"><span class="id">delay</span> <span class="op">>=</span> <span class="num">5</span>                          <span class="cm"># arrêter après 5 secondes quoi qu'il arrive</span>
+<span class="id">streams</span> <span class="op">>=</span> <span class="num">5</span> <span class="kw">or</span> <span class="id">delay</span> <span class="op">>=</span> <span class="num">10</span>      <span class="cm"># 5 en cache OU arrêt forcé après 10s</span>
+<span class="id">streams</span> <span class="op">>=</span> <span class="num">3</span> <span class="kw">and</span> <span class="id">delay</span> <span class="op">>=</span> <span class="num">2</span>      <span class="cm"># au moins 2s ET 3 en cache (laisse les sources démarrer)</span></div>
+      </div>
+    </section>
+
+    <!-- Filtrer -->
+    <section class="section" id="filtres">
+      <div class="section-title">
+        <div class="icon" style="background:var(--blued)">🔍</div>
+        Filtrer par critère
+      </div>
+      <hr class="div"/>
+      <p class="section-lead">
+        Vous pouvez compter uniquement les streams qui correspondent à un critère précis :
+        résolution, qualité ou langue. La syntaxe est :
+      </p>
+      <div class="code">
+        <div class="code-lbl">Syntaxe générale</div>
+        <div class="code-body"><span class="fn">count</span>( <span class="fn">filtre</span>( <span class="id">streams</span>, <span class="str">'critère'</span> ) ) <span class="op">>=</span> <span class="num">N</span>
+
+<span class="cm"># Exemples :</span>
+<span class="fn">count</span>( <span class="fn">resolution</span>( <span class="id">streams</span>, <span class="str">'>=1080p'</span> ) ) <span class="op">>=</span> <span class="num">3</span>   <span class="cm"># 3 streams en 1080p ou plus</span>
+<span class="fn">count</span>( <span class="fn">lang</span>( <span class="id">streams</span>, <span class="str">'fr'</span> ) ) <span class="op">>=</span> <span class="num">2</span>             <span class="cm"># 2 streams en français</span></div>
+      </div>
+      <p class="section-lead" style="margin-top:14px">
+        <code>streams</code> représente uniquement les streams <strong style="color:var(--text)">déjà en cache</strong> sur AllDebrid — tous les filtres portent donc sur des streams immédiatement jouables.
+      </p>
+      <p class="section-lead" style="margin-top:14px">
+        Les filtres peuvent s'imbriquer — chaque filtre reçoit le résultat du précédent :
+      </p>
+      <div class="code">
+        <div class="code-lbl">Imbrication de filtres</div>
+        <div class="code-body"><span class="cm"># Streams en français, en 1080p ou plus :</span>
+<span class="fn">count</span>( <span class="fn">resolution</span>( <span class="fn">lang</span>( <span class="id">streams</span>, <span class="str">'fr'</span> ), <span class="str">'>=1080p'</span> ) ) <span class="op">>=</span> <span class="num">1</span></div>
+      </div>
+    </section>
+
+    <!-- Résolution -->
+    <section class="section" id="resolution">
+      <div class="section-title">
+        <div class="icon" style="background:var(--blued)">📺</div>
+        Résolution
+      </div>
+      <hr class="div"/>
+      <p class="section-lead">
+        Filtre les streams selon leur résolution vidéo.
+        Utilisez un opérateur pour définir une plage (<code>&gt;=1080p</code> = Full HD et au-dessus).
+      </p>
+      <div class="ladder">
+        <span class="lval">480p</span><span class="larr">→</span>
+        <span class="lval">576p</span><span class="larr">→</span>
+        <span class="lval">720p</span><span class="larr">→</span>
+        <span class="lval">1080p</span><span class="larr">→</span>
+        <span class="lval">1440p</span><span class="larr">→</span>
+        <span class="lval best">2160p / 4k</span>
+      </div>
+      <div class="card" style="margin-top:14px">
+        <table>
+          <thead><tr><th>Valeur</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">480p</td><td class="desc">SD — qualité standard</td></tr>
+            <tr><td class="mono">720p</td><td class="desc">HD — haute définition</td></tr>
+            <tr><td class="mono">1080p</td><td class="desc">Full HD</td></tr>
+            <tr><td class="mono">1440p</td><td class="desc">2K</td></tr>
+            <tr><td class="mono">2160p</td><td class="desc">4K / UHD</td></tr>
+            <tr><td class="mono">4k</td><td class="desc">Identique à 2160p</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="code" style="margin-top:12px">
+        <div class="code-lbl">Exemples</div>
+        <div class="code-body"><span class="fn">count</span>(<span class="fn">resolution</span>(<span class="id">streams</span>, <span class="str">'>=1080p'</span>)) <span class="op">>=</span> <span class="num">3</span>   <span class="cm"># 3 streams Full HD ou mieux</span>
+<span class="fn">count</span>(<span class="fn">resolution</span>(<span class="id">streams</span>, <span class="str">'>=2160p'</span>)) <span class="op">>=</span> <span class="num">1</span>   <span class="cm"># au moins 1 stream 4K</span>
+<span class="fn">count</span>(<span class="fn">resolution</span>(<span class="id">streams</span>, <span class="str">'1080p'</span>)) <span class="op">>=</span> <span class="num">2</span>    <span class="cm"># exactement 1080p (sans opérateur = égalité)</span></div>
+      </div>
+    </section>
+
+    <!-- Qualité -->
+    <section class="section" id="qualite">
+      <div class="section-title">
+        <div class="icon" style="background:var(--amberd)">🎬</div>
+        Qualité source
+      </div>
+      <hr class="div"/>
+      <p class="section-lead">
+        Filtre selon l'origine du fichier vidéo. Plus le rang est élevé, meilleure est la qualité audio/vidéo.
+      </p>
+      <div class="ladder">
+        <span class="lval">cam</span><span class="larr">→</span>
+        <span class="lval">ts</span><span class="larr">→</span>
+        <span class="lval">hdtv</span><span class="larr">→</span>
+        <span class="lval">webrip</span><span class="larr">→</span>
+        <span class="lval">web-dl</span><span class="larr">→</span>
+        <span class="lval">bluray</span><span class="larr">→</span>
+        <span class="lval best">remux</span>
+      </div>
+      <div class="card" style="margin-top:14px">
+        <table>
+          <thead><tr><th>Valeur</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">cam</td><td class="desc">Enregistrement caméra en salle — très mauvais</td></tr>
+            <tr><td class="mono">ts</td><td class="desc">Téléciné — avant la sortie officielle</td></tr>
+            <tr><td class="mono">hdtv</td><td class="desc">Enregistrement TV HD</td></tr>
+            <tr><td class="mono">webrip</td><td class="desc">Rip d'une plateforme de streaming, re-encodé</td></tr>
+            <tr><td class="mono">web-dl</td><td class="desc">Téléchargement direct Netflix, Amazon, etc.</td></tr>
+            <tr><td class="mono">bluray</td><td class="desc">Rip depuis un disque Blu-ray</td></tr>
+            <tr><td class="mono">remux</td><td class="desc">Copie exacte du Blu-ray sans ré-encodage — qualité maximale</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="code" style="margin-top:12px">
+        <div class="code-lbl">Exemples</div>
+        <div class="code-body"><span class="fn">count</span>(<span class="fn">quality</span>(<span class="id">streams</span>, <span class="str">'>=bluray'</span>)) <span class="op">>=</span> <span class="num">1</span>   <span class="cm"># 1 Bluray ou Remux en cache</span>
+<span class="fn">count</span>(<span class="fn">quality</span>(<span class="id">streams</span>, <span class="str">'>=web-dl'</span>)) <span class="op">>=</span> <span class="num">3</span>    <span class="cm"># 3 streams web-dl ou mieux</span></div>
+      </div>
+    </section>
+
+    <!-- Langue -->
+    <section class="section" id="langue">
+      <div class="section-title">
+        <div class="icon" style="background:var(--greend)">🌐</div>
+        Langue
+      </div>
+      <hr class="div"/>
+      <p class="section-lead">
+        Filtre les streams selon leur langue audio. Utilisez le code à 2 lettres de la langue.
+      </p>
+      <div class="box tip">
+        <strong>Français :</strong> Le code <code style="background:none;border:none;padding:0;color:inherit">'fr'</code> reconnaît automatiquement toutes les variantes — VF, VFF, VFQ, Truefrench, Québécois. Vous n'avez pas à les spécifier séparément.
+      </div>
+      <div class="card" style="margin-top:12px">
+        <table>
+          <thead><tr><th>Code</th><th>Langue</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">'fr'</td><td class="desc">Français (VF, VFF, VFQ, Truefrench inclus)</td></tr>
+            <tr><td class="mono">'en'</td><td class="desc">Anglais</td></tr>
+            <tr><td class="mono">'es'</td><td class="desc">Espagnol</td></tr>
+            <tr><td class="mono">'de'</td><td class="desc">Allemand</td></tr>
+            <tr><td class="mono">'it'</td><td class="desc">Italien</td></tr>
+            <tr><td class="mono">'pt'</td><td class="desc">Portugais</td></tr>
+            <tr><td class="mono">'ja'</td><td class="desc">Japonais</td></tr>
+            <tr><td class="mono">'ko'</td><td class="desc">Coréen</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="code" style="margin-top:12px">
+        <div class="code-lbl">Exemples</div>
+        <div class="code-body"><span class="fn">count</span>(<span class="fn">lang</span>(<span class="id">streams</span>, <span class="str">'fr'</span>)) <span class="op">>=</span> <span class="num">1</span>   <span class="cm"># au moins 1 stream français</span>
+<span class="fn">count</span>(<span class="fn">lang</span>(<span class="id">streams</span>, <span class="str">'en'</span>)) <span class="op">>=</span> <span class="num">5</span>   <span class="cm"># 5 streams en anglais</span></div>
+      </div>
+    </section>
+
+    <!-- Exemples : Arrêt rapide -->
+    <section class="section" id="ex-rapide">
+      <div class="section-title">
+        <div class="icon" style="background:var(--amberd)">⚡</div>
+        Exemples — Arrêt rapide
+      </div>
+      <hr class="div"/>
+      <div class="examples">
+        <div class="ex">
+          <div class="ex-head"><span class="ex-lbl">Basique</span><span class="tag tag-speed">vitesse</span></div>
+          <div class="ex-code"><span class="id">streams</span> <span class="op">>=</span> <span class="num">5</span></div>
+          <div class="ex-desc">Arrêter dès que 5 streams sont disponibles en cache. Simple et efficace pour du contenu populaire.</div>
+        </div>
+        <div class="ex">
+          <div class="ex-head"><span class="ex-lbl">Timeout fixe</span><span class="tag tag-speed">vitesse</span></div>
+          <div class="ex-code"><span class="id">delay</span> <span class="op">>=</span> <span class="num">8</span></div>
+          <div class="ex-desc">Collecter pendant exactement 8 secondes puis afficher tout ce qui a été trouvé.</div>
+        </div>
+        <div class="ex">
+          <div class="ex-head"><span class="ex-lbl">Résultats rapides ou timeout</span><span class="tag tag-speed">vitesse</span></div>
+          <div class="ex-code"><span class="id">streams</span> <span class="op">>=</span> <span class="num">5</span> <span class="kw">or</span> <span class="id">delay</span> <span class="op">>=</span> <span class="num">10</span></div>
+          <div class="ex-desc">Arrêter dès 5 en cache, ou dans tous les cas après 10 secondes. Bon équilibre vitesse/résultats.</div>
+        </div>
+        <div class="ex">
+          <div class="ex-head"><span class="ex-lbl">Minimum avant arrêt</span><span class="tag tag-speed">vitesse</span></div>
+          <div class="ex-code"><span class="id">streams</span> <span class="op">>=</span> <span class="num">5</span> <span class="kw">and</span> <span class="id">delay</span> <span class="op">>=</span> <span class="num">2</span></div>
+          <div class="ex-desc">Attendre au moins 2 secondes avant d'arrêter, même si les 5 résultats arrivent très vite. Laisse le temps aux sources lentes de répondre.</div>
+        </div>
+        <div class="ex">
+          <div class="ex-head"><span class="ex-lbl">Priorité aux liens directs</span><span class="tag tag-speed">vitesse</span></div>
+          <div class="ex-code"><span class="id">ddl</span> <span class="op">>=</span> <span class="num">1</span> <span class="kw">or</span> <span class="id">delay</span> <span class="op">>=</span> <span class="num">12</span></div>
+          <div class="ex-desc">Arrêter dès qu'un lien direct (Movix/Wawacity) est trouvé, sinon timeout à 12s.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Exemples : Qualité -->
+    <section class="section" id="ex-qualite">
+      <div class="section-title">
+        <div class="icon" style="background:var(--blued)">🎯</div>
+        Exemples — Qualité
+      </div>
+      <hr class="div"/>
+      <div class="examples">
+        <div class="ex">
+          <div class="ex-head"><span class="ex-lbl">3 Full HD en cache</span><span class="tag tag-quality">qualité</span></div>
+          <div class="ex-code"><span class="fn">count</span>(<span class="fn">resolution</span>(<span class="id">streams</span>, <span class="str">'>=1080p'</span>)) <span class="op">>=</span> <span class="num">3</span></div>
+          <div class="ex-desc">Attendre qu'au moins 3 streams 1080p, 1440p ou 4K soient disponibles en cache.</div>
+        </div>
+        <div class="ex">
+          <div class="ex-head"><span class="ex-lbl">Un seul 4K suffit</span><span class="tag tag-quality">qualité</span></div>
+          <div class="ex-code"><span class="fn">count</span>(<span class="fn">resolution</span>(<span class="id">streams</span>, <span class="str">'>=2160p'</span>)) <span class="op">>=</span> <span class="num">1</span></div>
+          <div class="ex-desc">Dès qu'un stream 4K est disponible en cache, on arrête.</div>
+        </div>
+        <div class="ex">
+          <div class="ex-head"><span class="ex-lbl">Bluray ou mieux</span><span class="tag tag-quality">qualité</span></div>
+          <div class="ex-code"><span class="fn">count</span>(<span class="fn">quality</span>(<span class="id">streams</span>, <span class="str">'>=bluray'</span>)) <span class="op">>=</span> <span class="num">1</span></div>
+          <div class="ex-desc">Attendre qu'un rip Blu-ray ou remux soit disponible en cache.</div>
+        </div>
+        <div class="ex">
+          <div class="ex-head"><span class="ex-lbl">Qualité avec timeout</span><span class="tag tag-quality">qualité</span></div>
+          <div class="ex-code"><span class="fn">count</span>(<span class="fn">quality</span>(<span class="id">streams</span>, <span class="str">'>=bluray'</span>)) <span class="op">>=</span> <span class="num">1</span> <span class="kw">or</span> <span class="id">delay</span> <span class="op">>=</span> <span class="num">15</span></div>
+          <div class="ex-desc">Chercher un Bluray en cache, mais ne pas attendre plus de 15 secondes.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Exemples : Langue -->
+    <section class="section" id="ex-langue">
+      <div class="section-title">
+        <div class="icon" style="background:var(--greend)">🗣️</div>
+        Exemples — Langue
+      </div>
+      <hr class="div"/>
+      <div class="examples">
+        <div class="ex">
+          <div class="ex-head"><span class="ex-lbl">1 stream français en cache</span><span class="tag tag-lang">langue</span></div>
+          <div class="ex-code"><span class="fn">count</span>(<span class="fn">lang</span>(<span class="id">streams</span>, <span class="str">'fr'</span>)) <span class="op">>=</span> <span class="num">1</span></div>
+          <div class="ex-desc">S'arrêter dès qu'une version française est disponible en cache (VF, VFF, VFQ, Truefrench…).</div>
+        </div>
+        <div class="ex">
+          <div class="ex-head"><span class="ex-lbl">FR ou timeout</span><span class="tag tag-lang">langue</span></div>
+          <div class="ex-code"><span class="fn">count</span>(<span class="fn">lang</span>(<span class="id">streams</span>, <span class="str">'fr'</span>)) <span class="op">>=</span> <span class="num">1</span> <span class="kw">or</span> <span class="id">delay</span> <span class="op">>=</span> <span class="num">10</span></div>
+          <div class="ex-desc">Version française en cache, sinon arrêt à 10 secondes. Utile pour du contenu pas toujours disponible en VF.</div>
+        </div>
+        <div class="ex">
+          <div class="ex-head"><span class="ex-lbl">FR 1080p</span><span class="tag tag-lang">langue</span></div>
+          <div class="ex-code"><span class="fn">count</span>(<span class="fn">resolution</span>(<span class="fn">lang</span>(<span class="id">streams</span>, <span class="str">'fr'</span>), <span class="str">'>=1080p'</span>)) <span class="op">>=</span> <span class="num">1</span></div>
+          <div class="ex-desc">Un stream en français ET en Full HD ou mieux, disponible en cache.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Exemples : Combinés -->
+    <section class="section" id="ex-combines">
+      <div class="section-title">
+        <div class="icon" style="background:var(--accentd)">🧩</div>
+        Exemples — Combinés
+      </div>
+      <hr class="div"/>
+      <div class="examples">
+        <div class="ex">
+          <div class="ex-head"><span class="ex-lbl">FR ET qualité</span><span class="tag tag-mixed">combiné</span></div>
+          <div class="ex-code">(<span class="fn">count</span>(<span class="fn">lang</span>(<span class="id">streams</span>, <span class="str">'fr'</span>)) <span class="op">>=</span> <span class="num">1</span> <span class="kw">and</span> <span class="fn">count</span>(<span class="fn">resolution</span>(<span class="id">streams</span>, <span class="str">'>=1080p'</span>)) <span class="op">>=</span> <span class="num">2</span>) <span class="kw">or</span> <span class="id">delay</span> <span class="op">>=</span> <span class="num">12</span></div>
+          <div class="ex-desc">1 stream FR en cache ET 2 streams 1080p — sinon timeout à 12s.</div>
+        </div>
+        <div class="ex">
+          <div class="ex-head"><span class="ex-lbl">Plusieurs conditions alternatives</span><span class="tag tag-mixed">combiné</span></div>
+          <div class="ex-code"><span class="id">streams</span> <span class="op">>=</span> <span class="num">8</span> <span class="kw">or</span> <span class="fn">count</span>(<span class="fn">resolution</span>(<span class="id">streams</span>, <span class="str">'>=2160p'</span>)) <span class="op">>=</span> <span class="num">1</span> <span class="kw">or</span> <span class="id">delay</span> <span class="op">>=</span> <span class="num">15</span></div>
+          <div class="ex-desc">8 résultats en cache, OU un 4K, OU 15 secondes. La première condition vraie gagne.</div>
+        </div>
+        <div class="ex">
+          <div class="ex-head"><span class="ex-lbl">Séries — efficace</span><span class="tag tag-mixed">combiné</span></div>
+          <div class="ex-code"><span class="fn">count</span>(<span class="fn">resolution</span>(<span class="id">streams</span>, <span class="str">'>=1080p'</span>)) <span class="op">>=</span> <span class="num">2</span> <span class="kw">or</span> <span class="id">delay</span> <span class="op">>=</span> <span class="num">10</span></div>
+          <div class="ex-desc">Bon réglage pour les séries : 2 streams HD en cache suffisent, timeout 10s.</div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<script>
+  const sections = document.querySelectorAll('section[id]');
+  const links = document.querySelectorAll('.sidebar a');
+  const io = new IntersectionObserver(entries => {
+    entries.forEach(e => {
+      if (e.isIntersecting)
+        links.forEach(l => l.classList.toggle('active', l.getAttribute('href') === '#' + e.target.id));
+    });
+  }, { rootMargin: '-20% 0px -70% 0px' });
+  sections.forEach(s => io.observe(s));
+</script>
+</body>
+</html>

@@ -1,10 +1,10 @@
-import os
-
 """
 settings.py
 ───────────
 Single source of truth for all external URLs and global defaults.
 """
+
+import os
 
 # ── AllDebrid ─────────────────────────────────────────────────────────────────
 ALLDEBRID_BASE_URL = "https://api.alldebrid.com/v4"
@@ -30,6 +30,9 @@ DARKIWORLD_API_BASE_URL = "https://darkiworld2026.com/api/v1"
 # ── Wawacity ──────────────────────────────────────────────────────────────────
 WAWACITY_BASE_URL = "https://www.wawacity.pizza"
 
+# ── Torrent9 ──────────────────────────────────────────────────────────────────
+TORRENT9_BASE_URL = "https://www.torrent9.my"
+
 # ── Sources Torznab où MULTI = français garanti ───────────────────────────────
 # Sur Ygg, C411, Torr9 : MULTI inclut toujours le français.
 # Sur les autres (StremThru, Zilean…) : MULTI = plusieurs langues sans garantie.
@@ -45,7 +48,7 @@ ALLDEBRID_BATCH_SIZE   = 80
 # ── Addon metadata ────────────────────────────────────────────────────────────
 ADDON_ID          = "community.stremio-tor"
 ADDON_NAME        = "Tor"
-ADDON_VERSION     = "1.0.4"
+ADDON_VERSION     = "1.0.5"
 ADDON_DESCRIPTION = "Stremio Optimized +5 Torrent Source, +2 DDL Source, Alldebrid Support  │ By Adam!"
 ADDON_LOGO        = "https://images.icon-icons.com/2552/PNG/512/tor_alpha_browser_logo_icon_152957.png"
 LOG_LEVEL         = os.environ.get("LOG_LEVEL", "INFO")

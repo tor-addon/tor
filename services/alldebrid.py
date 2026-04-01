@@ -1,22 +1,22 @@
 """
 services/alldebrid.py
 ─────────────────────
-AllDebrid API client. Synchronous – call via asyncio.to_thread().
+AllDebrid API client. Asynchronous.
 
-  check_cache(torrents)         – batch instant-availability check (upload → mark ready → delete)
-  resolve_stream(...)           – upload hash → file tree → pick best file → CDN URL → delete
-  resolve_library_stream(...)  – existing library magnet id → file tree → CDN URL (no upload, no delete)
+  check_cache(torrents)         – batch instant-availability check
+  resolve_stream(...)           – upload magnet → file tree → pick file → CDN URL → delete
+  resolve_library_stream(...)   – existing library magnet → file tree → CDN URL (no upload/delete)
   unlock_link(link)             – any direct link (1fichier…) → streaming URL
+  redirector_link(link)         – follow AllDebrid redirector → real link
 
-Retry policy: network errors (ConnectionError, Timeout) are retried up to
-2 times with a 500 ms delay. Logic errors (bad API key, hash invalid…) are
-not retried.
+Retry policy: ConnectError / TimeoutException retried up to _RETRY_ATTEMPTS times
+with _RETRY_DELAY seconds. Logic errors (bad key, invalid hash…) are not retried.
 """
 
+import asyncio
 import logging
-import time
 
-import requests
+import httpx
 
 from settings import ALLDEBRID_BASE_URL, ALLDEBRID_AGENT, ALLDEBRID_BATCH_SIZE
 from utils.episode_selector import find_best_file
@@ -27,42 +27,40 @@ _RETRY_ATTEMPTS = 3
 _RETRY_DELAY    = 0.5
 
 
-def _request_with_retry(fn):
-    """
-    Call fn() up to _RETRY_ATTEMPTS times.
-    Retries only on ConnectionError / Timeout; other exceptions propagate immediately.
-    """
+async def _retry(coro_fn) -> dict:
+    """Call coro_fn() up to _RETRY_ATTEMPTS times on network errors."""
     last_exc = None
     for attempt in range(1, _RETRY_ATTEMPTS + 1):
         try:
-            return fn()
-        except (requests.ConnectionError, requests.Timeout) as exc:
+            return await coro_fn()
+        except (httpx.ConnectError, httpx.TimeoutException) as exc:
             last_exc = exc
             if attempt < _RETRY_ATTEMPTS:
                 logger.warning(
                     "AllDebrid │ network error (attempt %d/%d): %s – retrying in %.1fs",
                     attempt, _RETRY_ATTEMPTS, exc, _RETRY_DELAY,
                 )
-                time.sleep(_RETRY_DELAY)
+                await asyncio.sleep(_RETRY_DELAY)
     raise last_exc
 
 
 class AllDebridClient:
-    __slots__ = ("api_key", "session")
+    __slots__ = ("api_key", "client")
 
     def __init__(self, api_key: str) -> None:
         self.api_key = api_key
-        self.session = requests.Session()
+        self.client  = httpx.AsyncClient(
+            limits=httpx.Limits(max_connections=40, max_keepalive_connections=8),
+            timeout=15,
+            follow_redirects=True,
+        )
 
     # ─────────────────────────────────────────────────────────────────────────
     # Cache check
     # ─────────────────────────────────────────────────────────────────────────
 
-    def check_cache(self, torrents: list[dict]) -> list[dict]:
-        """
-        Sets cached=True/False in-place.
-        DDL and pre-cached (Library) streams are skipped.
-        """
+    async def check_cache(self, torrents: list[dict]) -> list[dict]:
+        """Sets cached=True/False in-place. DDL and pre-cached streams are skipped."""
         to_check = [
             t for t in torrents
             if t.get("stream_type") != "ddl" and not t.get("cached")
@@ -80,9 +78,9 @@ class AllDebridClient:
         logger.info("AllDebrid │ cache check: %d unique hashes", len(unique))
 
         for i in range(0, len(unique), ALLDEBRID_BATCH_SIZE):
-            batch = unique[i: i + ALLDEBRID_BATCH_SIZE]
+            batch = unique[i : i + ALLDEBRID_BATCH_SIZE]
             try:
-                self._check_batch(batch, hash_map)
+                await self._check_batch(batch, hash_map)
             except Exception as exc:
                 logger.error("AllDebrid │ batch [%d:%d] failed: %s", i, i + ALLDEBRID_BATCH_SIZE, exc)
                 _mark_not_cached(batch, hash_map)
@@ -95,55 +93,49 @@ class AllDebridClient:
     # Torrent resolution
     # ─────────────────────────────────────────────────────────────────────────
 
-    def resolve_stream(
+    async def resolve_stream(
         self,
         info_hash: str,
         season: int | None = None,
         episode: int | None = None,
         year: int | None = None,
     ) -> str | None:
-        """Upload magnet → walk file tree → pick best file → unlock → URL → delete magnet."""
         logger.info(
             "AllDebrid │ resolve  hash=%s…  s=%s e=%s year=%s",
             info_hash[:12], season, episode, year,
         )
         magnet_id: int | None = None
         try:
-            magnet_id = self._upload_magnet(info_hash)
+            magnet_id = await self._upload_magnet(info_hash)
             if magnet_id is None:
                 return None
-
-            raw_files = self._fetch_files(magnet_id)
+            raw_files = await self._fetch_files(magnet_id)
             if raw_files is None:
                 return None
-
             flat = _flatten_tree(raw_files)
             logger.debug("AllDebrid │ %d file(s) in torrent", len(flat))
-
             best = find_best_file(flat, season=season, episode=episode, year=year)
             if best is None:
                 logger.warning("AllDebrid │ no matching file found")
                 return None
-
             logger.info("AllDebrid │ selected → %s (%.2f GB)", best["n"], best.get("s", 0) / 1e9)
-            return self._unlock(best["l"])
+            return await self._unlock(best["l"])
         finally:
             if magnet_id is not None:
-                self._delete_magnet(magnet_id)
+                await self._delete_magnet(magnet_id)
 
-    def resolve_library_stream(
+    async def resolve_library_stream(
         self,
         magnet_id: int,
         season: int | None = None,
         episode: int | None = None,
         year: int | None = None,
     ) -> str | None:
-        """Resolve an existing library magnet directly – no upload, no deletion."""
         logger.info(
             "AllDebrid │ library resolve  id=%s  s=%s e=%s year=%s",
             magnet_id, season, episode, year,
         )
-        raw_files = self._fetch_files(magnet_id)
+        raw_files = await self._fetch_files(magnet_id)
         if raw_files is None:
             return None
         flat = _flatten_tree(raw_files)
@@ -153,40 +145,37 @@ class AllDebridClient:
             logger.warning("AllDebrid │ no matching file found")
             return None
         logger.info("AllDebrid │ selected → %s (%.2f GB)", best["n"], best.get("s", 0) / 1e9)
-        return self._unlock(best["l"])
+        return await self._unlock(best["l"])
 
     # ─────────────────────────────────────────────────────────────────────────
     # DDL unlock
     # ─────────────────────────────────────────────────────────────────────────
 
-    def unlock_link(self, link: str) -> str | None:
-        """Unlock any direct link (1fichier…) → streamable URL."""
+    async def unlock_link(self, link: str) -> str | None:
         logger.info("AllDebrid │ unlock_link %s…", link[:60])
-        return self._unlock(link)
+        return await self._unlock(link)
 
-    def redirector_link(self, link: str) -> str | None:
+    async def redirector_link(self, link: str) -> str | None:
         logger.info("AllDebrid │ redirector %s…", link[:60])
 
-        def _call():
-            r = self.session.get(
-                f"{ALLDEBRID_BASE_URL}/link/redirector",
-                params={"link": link, "apikey": self.api_key, "agent": ALLDEBRID_AGENT},
-                timeout=15,
-            )
-            r.raise_for_status()
-            return r.json()
-
-        # 2 attempts total for REDIRECTOR_ERROR (1 extra retry)
         for attempt in range(1, 3):
-            body = _request_with_retry(_call)
+            async def _call():
+                r = await self.client.get(
+                    f"{ALLDEBRID_BASE_URL}/link/redirector",
+                    params={"link": link, "apikey": self.api_key, "agent": ALLDEBRID_AGENT},
+                )
+                r.raise_for_status()
+                return r.json()
+
+            body = await _retry(_call)
             if body.get("status") != "success":
-                err = body.get("error") or {}
+                err      = body.get("error") or {}
                 err_code = err.get("code", "") if isinstance(err, dict) else str(err)
                 err_msg  = err.get("message", "") if isinstance(err, dict) else str(err)
-                is_redirector = "REDIRECTOR_ERROR" in str(err_code) or "Could not extract" in str(err_msg)
-                if is_redirector and attempt < 2:
+                is_redir = "REDIRECTOR_ERROR" in str(err_code) or "Could not extract" in str(err_msg)
+                if is_redir and attempt < 2:
                     logger.warning("AllDebrid │ REDIRECTOR_ERROR attempt %d/2 – retrying in 1s…", attempt)
-                    time.sleep(1.0)
+                    await asyncio.sleep(1.0)
                     continue
                 logger.error("AllDebrid │ redirector failed: %s", err)
                 return None
@@ -203,17 +192,16 @@ class AllDebridClient:
     # Private helpers
     # ─────────────────────────────────────────────────────────────────────────
 
-    def _upload_magnet(self, info_hash: str) -> int | None:
-        def _call():
-            r = self.session.post(
+    async def _upload_magnet(self, info_hash: str) -> int | None:
+        async def _call():
+            r = await self.client.post(
                 f"{ALLDEBRID_BASE_URL}/magnet/upload",
                 data={"magnets[]": info_hash, "apikey": self.api_key, "agent": ALLDEBRID_AGENT},
-                timeout=15,
             )
             r.raise_for_status()
             return r.json()
 
-        body = _request_with_retry(_call)
+        body = await _retry(_call)
         if body.get("status") != "success":
             logger.error("AllDebrid │ upload failed: %s", body.get("error"))
             return None
@@ -225,17 +213,16 @@ class AllDebridClient:
         logger.debug("AllDebrid │ uploaded magnet id=%s", magnet_id)
         return magnet_id
 
-    def _fetch_files(self, magnet_id: int) -> list | None:
-        def _call():
-            r = self.session.post(
+    async def _fetch_files(self, magnet_id: int) -> list | None:
+        async def _call():
+            r = await self.client.post(
                 f"{ALLDEBRID_BASE_URL}/magnet/files",
                 data={"id[]": [magnet_id], "apikey": self.api_key, "agent": ALLDEBRID_AGENT},
-                timeout=15,
             )
             r.raise_for_status()
             return r.json()
 
-        body = _request_with_retry(_call)
+        body = await _retry(_call)
         if body.get("status") != "success":
             logger.error("AllDebrid │ files fetch failed: %s", body.get("error"))
             return None
@@ -245,17 +232,16 @@ class AllDebridClient:
             return None
         return magnets[0].get("files") or []
 
-    def _unlock(self, link: str) -> str | None:
-        def _call():
-            r = self.session.get(
+    async def _unlock(self, link: str) -> str | None:
+        async def _call():
+            r = await self.client.get(
                 f"{ALLDEBRID_BASE_URL}/link/unlock",
                 params={"link": link, "apikey": self.api_key, "agent": ALLDEBRID_AGENT},
-                timeout=15,
             )
             r.raise_for_status()
             return r.json()
 
-        body = _request_with_retry(_call)
+        body = await _retry(_call)
         if body.get("status") != "success":
             logger.error("AllDebrid │ unlock failed: %s", body.get("error"))
             return None
@@ -263,9 +249,9 @@ class AllDebridClient:
         logger.info("AllDebrid │ unlocked → %s…", url[:60])
         return url
 
-    def _delete_magnet(self, magnet_id: int) -> None:
+    async def _delete_magnet(self, magnet_id: int) -> None:
         try:
-            self.session.post(
+            await self.client.post(
                 f"{ALLDEBRID_BASE_URL}/magnet/delete",
                 data={"ids[]": [magnet_id], "apikey": self.api_key, "agent": ALLDEBRID_AGENT},
                 timeout=10,
@@ -274,17 +260,17 @@ class AllDebridClient:
         except Exception as exc:
             logger.warning("AllDebrid │ delete failed id=%s: %s", magnet_id, exc)
 
-    def _check_batch(self, batch: list[str], hash_map: dict[str, list[dict]]) -> None:
+    async def _check_batch(self, batch: list[str], hash_map: dict[str, list[dict]]) -> None:
         payload = {"agent": ALLDEBRID_AGENT, "apikey": self.api_key, "magnets[]": batch}
 
-        def _call():
-            r = self.session.post(
-                f"{ALLDEBRID_BASE_URL}/magnet/upload", data=payload, timeout=15
+        async def _call():
+            r = await self.client.post(
+                f"{ALLDEBRID_BASE_URL}/magnet/upload", data=payload
             )
             r.raise_for_status()
             return r.json()
 
-        body = _request_with_retry(_call)
+        body = await _retry(_call)
 
         if body.get("status") != "success":
             logger.warning("AllDebrid │ API error: %s", body.get("error", {}))
@@ -297,7 +283,6 @@ class AllDebridClient:
             is_ready = bool(m.get("ready", False))
             if "id" in m:
                 ids_to_delete.append(m["id"])
-
             if ad_hash in hash_map:
                 _apply(hash_map[ad_hash], is_ready)
             else:
@@ -308,7 +293,7 @@ class AllDebridClient:
 
         if ids_to_delete:
             try:
-                self.session.post(
+                await self.client.post(
                     f"{ALLDEBRID_BASE_URL}/magnet/delete",
                     data={"agent": ALLDEBRID_AGENT, "apikey": self.api_key, "ids[]": ids_to_delete},
                     timeout=10,
@@ -317,8 +302,10 @@ class AllDebridClient:
                 logger.warning("AllDebrid │ delete error: %s", exc)
 
     def close(self) -> None:
-        self.session.close()
+        pass
 
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 def _flatten_tree(entries: list, path: str = "") -> list[dict]:
     files = []

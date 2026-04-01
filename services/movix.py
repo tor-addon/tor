@@ -1,25 +1,24 @@
 """
 services/movix.py
 ─────────────────
-Movix DDL source client.
-Synchronous – designed to be called via asyncio.to_thread().
+Movix DDL source. Asynchronous.
 
 Flow:
-  1. find_id(titles, tmdb_id, imdb_id)   → search, validate via tmdb/imdb id
+  1. find_id(titles, tmdb_id, imdb_id)   → parallel title search, validate by ID
   2. get_streams(movix_id, ...)           → fetch 1fichier links, normalize
   3. get_direct_link(stream_id)           → decode raw 1fichier URL
 
-Stream dicts are pipeline-compatible.
-infohash = "movix_{id}" – synthetic key for deduplicator, carries the id.
+infohash = "" for all Movix streams; ddl_id carries the stream_id.
+ID cache (module-level, 500 entries) avoids re-searching stable IDs.
 """
 
+import asyncio
 import base64
 import json
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import quote_plus
 
-import requests
+import httpx
 
 from settings import (
     MOVIX_DECODE_BASE_URL,
@@ -30,11 +29,9 @@ from settings import (
 
 logger = logging.getLogger(__name__)
 
-# ── Title → Movix ID cache (module-level; IDs are stable, no TTL needed) ─────
 _ID_CACHE: dict[tuple[str, str], int | None] = {}
 _ID_CACHE_MAX = 500
 
-# ── Language name → ISO 639-1 ──────────────────────────────────────────────────
 _LANG_MAP: dict[str, str] = {
     "french":           "fr",
     "french (canada)":  "fr",
@@ -85,26 +82,30 @@ def _episode_filter(episode: int) -> str:
 
 
 class MovixClient:
-    __slots__ = ()
+    __slots__ = ("_client_dw", "_client_dec")
 
     def __init__(self, base_url: str = "") -> None:
-        pass
+        self._client_dw = httpx.AsyncClient(
+            headers=_DARKIWORLD_HEADERS,
+            limits=httpx.Limits(max_connections=8, max_keepalive_connections=4),
+            timeout=8,
+        )
+        self._client_dec = httpx.AsyncClient(
+            headers=_DECODE_HEADERS,
+            limits=httpx.Limits(max_connections=4, max_keepalive_connections=2),
+            timeout=10,
+        )
 
     # ─────────────────────────────────────────────────────────────────────────
     # 1. ID resolution
     # ─────────────────────────────────────────────────────────────────────────
 
-    def find_id(
+    async def find_id(
         self,
         titles: list[str],
         tmdb_id: str | None = None,
         imdb_id: str | None = None,
     ) -> int | None:
-        """
-        Search Movix for all titles in parallel.
-        Validates by tmdb_id OR imdb_id (at least one must match).
-        Returns first valid match. Results are cached (IDs are stable).
-        """
         cache_key = (str(tmdb_id or ""), str(imdb_id or ""))
         if cache_key in _ID_CACHE:
             cached = _ID_CACHE[cache_key]
@@ -116,23 +117,30 @@ class MovixClient:
             return None
 
         result: int | None = None
+
         if len(unique) == 1:
-            result = self._search_title(unique[0], tmdb_id=tmdb_id, imdb_id=imdb_id)
-            if result is not None:
-                logger.info("Movix │ found id=%d for title=%r", result, unique[0])
-            else:
-                logger.info("Movix │ no ID found for titles=%s", unique)
+            result = await self._search_title(unique[0], tmdb_id, imdb_id)
+            logger.info("Movix │ %s id=%s for %r", "found" if result else "no result", result, unique[0])
         else:
-            with ThreadPoolExecutor(max_workers=min(len(unique), 4)) as pool:
-                futs = {pool.submit(self._search_title, t, tmdb_id, imdb_id): t for t in unique}
-                for f in as_completed(futs):
-                    r = f.result()
-                    if r is not None:
+            # All titles in parallel – return first hit, cancel the rest
+            tasks = [
+                asyncio.create_task(self._search_title(t, tmdb_id, imdb_id))
+                for t in unique
+            ]
+            for coro in asyncio.as_completed(tasks):
+                try:
+                    r = await coro
+                    if r is not None and result is None:
                         result = r
-                        logger.info("Movix │ found id=%d for title=%r", r, futs[f])
-                        for remaining in futs:
-                            remaining.cancel()
-                        break
+                        logger.info("Movix │ found id=%d", r)
+                except Exception:
+                    pass
+                if result is not None:
+                    break
+            for t in tasks:
+                if not t.done():
+                    t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
             if result is None:
                 logger.info("Movix │ no ID found for titles=%s", unique)
 
@@ -140,17 +148,15 @@ class MovixClient:
             _ID_CACHE[cache_key] = result
         return result
 
-    def _search_title(
+    async def _search_title(
         self,
         title: str,
         tmdb_id: str | None,
         imdb_id: str | None,
     ) -> int | None:
         try:
-            r = requests.get(
+            r = await self._client_dw.get(
                 f"{DARKIWORLD_API_BASE_URL}/search/{quote_plus(title)}",
-                headers=_DARKIWORLD_HEADERS,
-                timeout=8,
             )
             r.raise_for_status()
             results = r.json().get("results") or []
@@ -161,17 +167,15 @@ class MovixClient:
         for result in results:
             r_tmdb = str(result.get("tmdb_id") or "")
             r_imdb = str(result.get("imdb_id") or "")
-
             if (tmdb_id and r_tmdb == str(tmdb_id)) or (imdb_id and r_imdb == str(imdb_id)):
                 return result.get("id")
-
         return None
 
     # ─────────────────────────────────────────────────────────────────────────
     # 2. Stream listing
     # ─────────────────────────────────────────────────────────────────────────
 
-    def get_streams(
+    async def get_streams(
         self,
         movix_id: int,
         media_title: str,
@@ -179,10 +183,6 @@ class MovixClient:
         season: int | None = None,
         episode: int | None = None,
     ) -> list[dict]:
-        """
-        Returns pipeline-compatible stream dicts for all 1fichier links.
-        Series: always scoped to a specific episode (no complete seasons).
-        """
         params: dict = {
             "perPage":  "20",
             "title_id": str(movix_id),
@@ -191,13 +191,12 @@ class MovixClient:
             "filters":  "",
             "paginate": "preferLengthAware",
         }
-
         if is_serie and episode is not None:
             params["filters"] = _episode_filter(episode)
 
         for attempt in range(2):
             try:
-                r = requests.get(f"{DARKIWORLD_API_BASE_URL}/liens", params=params, headers=_DARKIWORLD_HEADERS, timeout=8)
+                r = await self._client_dw.get(f"{DARKIWORLD_API_BASE_URL}/liens", params=params)
                 if r.status_code == 401 and attempt == 0:
                     logger.warning("Movix │ 401 on get_streams id=%d, retrying…", movix_id)
                     continue
@@ -212,17 +211,16 @@ class MovixClient:
 
         streams: list[dict] = []
         for raw in raw_streams:
-            host = raw.get("host", {})
+            host      = raw.get("host", {})
             host_name = (host.get("name") if isinstance(host, dict) else host) or ""
             if host_name.lower() not in DDL_ALLOWED_HOSTS:
                 continue
-
             stream = self._normalize(raw, media_title, is_serie, season)
             if stream:
                 streams.append(stream)
 
         logger.info(
-            "Movix │ %d 1fichier stream(s)  movix_id=%d  s=%s e=%s",
+            "Movix │ %d stream(s)  movix_id=%d  s=%s e=%s",
             len(streams), movix_id, season, episode,
         )
         return streams
@@ -238,7 +236,6 @@ class MovixClient:
         if not stream_id:
             return None
 
-        # ── Languages (pre-set; PTT fallback since API uses proper lang names) ─
         lang_objects = raw.get("langues_compact") or []
         lang_names   = (
             [l.get("name", "") for l in lang_objects]
@@ -247,7 +244,6 @@ class MovixClient:
         )
         languages = list({_normalize_lang(n) for n in lang_names if n})
 
-        # ── Quality string for torrent_name (PTT will parse it) ───────────────
         quality_raw = (
             (raw.get("qual") or {}).get("qual")
             or raw.get("quality")
@@ -255,48 +251,37 @@ class MovixClient:
             or ""
         )
 
-        # ── Size (raw bytes from the API) ──────────────────────────────────────
         try:
             size_bytes = int(float(raw.get("taille", 0)))
         except (TypeError, ValueError):
             size_bytes = 0
 
-        # ── Series metadata ────────────────────────────────────────────────────
         raw_season  = raw.get("saison")
         raw_episode = raw.get("episode")
         seasons  = [int(raw_season)]  if raw_season  else ([season] if season else [])
         episodes = [int(raw_episode)] if raw_episode else []
 
         return {
-            # torrent_name includes quality string so PTT can parse resolution/quality
             "torrent_name": f"{media_title} {quality_raw}".strip() if quality_raw else media_title,
-            "infohash":    "",
-            "ddl_id":      stream_id,
-            "source":      "Movix",
-            "stream_type": "ddl",
-            "languages":   languages,
-            "seasons":     seasons,
-            "episodes":    episodes,
-            "complete":    False,
-            "size":        size_bytes,
-            "cached":      True,
+            "infohash":     "",
+            "ddl_id":       stream_id,
+            "source":       "Movix",
+            "stream_type":  "ddl",
+            "languages":    languages,
+            "seasons":      seasons,
+            "episodes":     episodes,
+            "complete":     False,
+            "size":         size_bytes,
+            "cached":       True,
         }
 
     # ─────────────────────────────────────────────────────────────────────────
     # 3. Link decoding
     # ─────────────────────────────────────────────────────────────────────────
 
-    def get_direct_link(self, stream_id: int) -> str | None:
-        """
-        Decode a Movix stream id → raw 1fichier URL.
-        Pass the result to AllDebridClient.unlock_link() to get a streamable URL.
-        """
+    async def get_direct_link(self, stream_id: int) -> str | None:
         try:
-            r = requests.get(
-                f"{MOVIX_DECODE_BASE_URL}/{stream_id}",
-                headers=_DECODE_HEADERS,
-                timeout=10,
-            )
+            r = await self._client_dec.get(f"{MOVIX_DECODE_BASE_URL}/{stream_id}")
             r.raise_for_status()
             body = r.json()
         except Exception as exc:

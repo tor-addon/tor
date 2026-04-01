@@ -425,6 +425,25 @@
           </div>
         </div>
 
+        <!-- Torrent9 (enabled by default) -->
+        <div class="source-card enabled" id="torrent9-card" style="margin-top:8px">
+          <div class="source-top">
+            <div class="src-dot" id="torrent9-dot"></div>
+            <span class="src-name">Torrent9</span>
+            <span class="tag tag-torrent">TORRENT</span>
+            <button class="chevron-btn" id="torrent9-chevron" onclick="toggleExpand('torrent9')">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+            <input type="checkbox" class="switch" id="enable-torrent9" checked onchange="syncTorrent9();rebuild()"/>
+          </div>
+          <div class="source-body" id="body-torrent9">
+            <div>
+              <label class="form-label">URL personnalisée</label>
+              <input type="text" class="input-field" id="torrent9-url" placeholder="Laisser vide = URL par défaut" oninput="rebuild()"/>
+            </div>
+          </div>
+        </div>
+
         <!-- Wawacity (enabled by default) -->
         <div class="source-card enabled" id="wawacity-card" style="margin-top:8px">
           <div class="source-top">
@@ -499,9 +518,14 @@
             <div class="toggle-desc">Versions acceptées — sélectionnez tout ce que vous souhaitez voir</div>
           </div>
           <sl-select id="languageSelect" multiple clearable placeholder="Sélectionner les langues…">
-            <sl-option value="fr">Français</sl-option>
+            <sl-option value="fr">Français (VF)</sl-option>
             <sl-option value="multi">Multi</sl-option>
             <sl-option value="vostfr">VOSTFR</sl-option>
+            <sl-option value="en">English</sl-option>
+            <sl-option value="de">Deutsch</sl-option>
+            <sl-option value="es">Español</sl-option>
+            <sl-option value="it">Italiano</sl-option>
+            <sl-option value="pt">Português</sl-option>
           </sl-select>
         </div>
 
@@ -542,6 +566,33 @@
           </div>
         </div>
 
+      </div>
+    </div>
+
+    <!-- Exit Condition -->
+    <div class="card">
+      <div class="card-inner">
+        <div class="toggle-name" style="margin-bottom:6px">
+          Condition d'arrêt anticipé
+          <a href="/static/exit_condition_docs.html" target="_blank"
+             style="margin-left:10px;font-size:11px;font-weight:400;color:var(--accent);opacity:.75;text-decoration:none;border:1px solid var(--border2);border-radius:4px;padding:2px 8px;vertical-align:middle;transition:opacity .15s"
+             onmouseover="this.style.opacity=1" onmouseout="this.style.opacity='.75'">
+            Documentation complète →
+          </a>
+        </div>
+        <div class="toggle-desc" style="margin-bottom:12px">
+          Arrête la recherche dès que la condition est remplie. Laissez vide pour attendre toutes les sources.
+        </div>
+        <label class="form-label">Condition</label>
+        <input type="text" class="input-field" id="exit-condition"
+               placeholder="ex: streams >= 5 or delay >= 8"
+               oninput="rebuild()" style="font-family:'SF Mono','Fira Code',monospace;font-size:12px"/>
+        <div style="font-size:11px;color:var(--text2);margin-top:8px">
+          Exemples rapides :
+          <code style="color:var(--accent);font-size:11px">streams >= 5</code> ·
+          <code style="color:var(--accent);font-size:11px">delay >= 8</code> ·
+          <code style="color:var(--accent);font-size:11px">streams >= 3 or delay >= 10</code>
+        </div>
       </div>
     </div>
   </div>
@@ -704,11 +755,14 @@ if (_preload) {
   if (c.mm) { document.getElementById("min-match").value = c.mm; document.getElementById("mm-val").textContent = c.mm+"%"; }
   if (c.mx === false) document.getElementById("enable-movix").checked = false;
   if (c.mu) document.getElementById("movix-url").value = c.mu;
+  if (c.e9 === false) document.getElementById("enable-torrent9").checked = false;
+  if (c.t9) document.getElementById("torrent9-url").value = c.t9;
   if (c.ew === false) document.getElementById("enable-wawacity").checked = false;
   if (c.wu) document.getElementById("wawacity-url").value = c.wu;
   if (c.el === false) document.getElementById("enable-library").checked = false;
   if (c.lp) document.getElementById("library-priority").checked = true;
   if (c.nt === false) document.getElementById("remove-non-tv").checked = false;
+  if (c.ec) document.getElementById("exit-condition").value = c.ec;
   if (c.df) fmt = c.df;
   if (c.tz) {
     const ids = new Set();
@@ -730,9 +784,16 @@ if (_preload) {
 }
 
 // ── Wait for Shoelace then init ────────────────────────────────────────────────
-customElements.whenDefined('sl-select').then(() => {
+// customElements.whenDefined resolves when the class is registered, but Shoelace
+// (LitElement) does an async render pass before .value can be set. We await
+// updateComplete on each element so the shadow DOM is stamped first.
+customElements.whenDefined('sl-select').then(async () => {
   const langSel = document.getElementById('languageSelect');
   const resSel  = document.getElementById('resolutionSelect');
+
+  // Wait for first render of both components
+  await langSel.updateComplete;
+  await resSel.updateComplete;
 
   // Defaults: fr selected, all resolutions selected
   langSel.value = ['fr'];
@@ -745,7 +806,6 @@ customElements.whenDefined('sl-select').then(() => {
       langSel.value = Array.isArray(c.lg) ? c.lg : [c.lg];
     }
     if (c.ar && c.ar.length > 0) {
-      // Explicit subset saved — apply it
       resSel.value = c.ar;
     }
     // c.ar empty/absent → keep all selected (default)
@@ -786,6 +846,15 @@ function syncMovix() {
   dot.style.boxShadow  = on ? "0 0 7px var(--accent)" : "none";
 }
 
+// ── Torrent9 ───────────────────────────────────────────────────────────────────
+function syncTorrent9() {
+  const on = document.getElementById("enable-torrent9").checked;
+  document.getElementById("torrent9-card").className = "source-card" + (on ? " enabled" : "");
+  const dot = document.getElementById("torrent9-dot");
+  dot.style.background = on ? "var(--accent)" : "var(--text3)";
+  dot.style.boxShadow  = on ? "0 0 7px var(--accent)" : "none";
+}
+
 // ── Wawacity ───────────────────────────────────────────────────────────────────
 function syncWawacity() {
   const on = document.getElementById("enable-wawacity").checked;
@@ -807,8 +876,8 @@ function syncLibrary() {
 
 // ── Expand ─────────────────────────────────────────────────────────────────────
 function toggleExpand(id) {
-  const bodyId = id === "movix" ? "body-movix" : id === "wawacity" ? "body-wawacity" : "body-tz-" + id.replace("tz-","");
-  const btnId  = id === "movix" ? "movix-chevron" : id === "wawacity" ? "wawacity-chevron" : "chev-" + id.replace("tz-","");
+  const bodyId = id === "movix" ? "body-movix" : id === "wawacity" ? "body-wawacity" : id === "torrent9" ? "body-torrent9" : "body-tz-" + id.replace("tz-","");
+  const btnId  = id === "movix" ? "movix-chevron" : id === "wawacity" ? "wawacity-chevron" : id === "torrent9" ? "torrent9-chevron" : "chev-" + id.replace("tz-","");
   const body = document.getElementById(bodyId);
   const btn  = document.getElementById(btnId);
   if (!body) return;
@@ -971,8 +1040,11 @@ function getConfig() {
     el: document.getElementById("enable-library").checked,
     lp: document.getElementById("library-priority").checked,
     nt: document.getElementById("remove-non-tv").checked,
+    e9: document.getElementById("enable-torrent9").checked,
+    t9: document.getElementById("torrent9-url").value.trim(),
     ew: document.getElementById("enable-wawacity").checked,
     wu: document.getElementById("wawacity-url").value.trim(),
+    ec: document.getElementById("exit-condition").value.trim(),
   };
 }
 
