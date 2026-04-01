@@ -27,7 +27,7 @@ class LibraryClient:
     def __init__(self, api_key: str) -> None:
         self.api_key   = api_key
         self.client    = httpx.AsyncClient(
-            limits=httpx.Limits(max_connections=4, max_keepalive_connections=2),
+            limits=httpx.Limits(max_connections=4, max_keepalive_connections=2, keepalive_expiry=30.0),
             timeout=15,
         )
         self._cache:    list[dict] | None = None

@@ -40,7 +40,7 @@ class Torznab:
         self.url         = url
         self.apikey      = apikey
         self.client      = httpx.AsyncClient(
-            limits=httpx.Limits(max_connections=4, max_keepalive_connections=2),
+            limits=httpx.Limits(max_connections=4, max_keepalive_connections=2, keepalive_expiry=30.0),
             timeout=5,
         )
         self.movie_cats  = movie_cats or []

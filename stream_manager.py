@@ -144,21 +144,21 @@ class StreamManager:
             if not deduped or exit_event.is_set():
                 return
 
-            valid: list[dict] = []
-            for s in deduped:
-                if filt.is_valid(s):
-                    ranking.rank(s)
-                    if self._library_priority and s.get("source") == "Library":
-                        s["rank"] += LIBRARY_BONUS
-                    valid.append(s)
-                else:
-                    reason = s.get("invalid_reason", "Unknown")
-                    key    = reason.split(":")[0]
-                    rejected_counts[key] = rejected_counts.get(key, 0) + 1
-                    detail = _reject_detail(s, reason)
-                    bucket = rejected_examples[key]
-                    if detail and detail not in bucket and len(bucket) < 3:
-                        bucket.append(detail)
+            # CPU-bound (PTT parse + fuzzy match + rank) → thread pool so that
+            # multiple sources filter in parallel instead of serializing on the
+            # event loop (which tripled latency vs the old asyncio.to_thread+requests).
+            valid, rej_counts, rej_ex = await asyncio.to_thread(
+                _filter_and_rank, deduped, filt, self._library_priority
+            )
+
+            # Merge rejection stats back on the event loop (single-threaded, no race)
+            for k, c in rej_counts.items():
+                rejected_counts[k] = rejected_counts.get(k, 0) + c
+            for k, examples in rej_ex.items():
+                bucket = rejected_examples[k]
+                for ex in examples:
+                    if ex not in bucket and len(bucket) < 3:
+                        bucket.append(ex)
 
             if not valid or exit_event.is_set():
                 return
@@ -434,6 +434,40 @@ class StreamManager:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+
+def _filter_and_rank(
+    streams: list[dict],
+    filt: "StreamFilter",
+    library_priority: bool,
+) -> tuple[list[dict], dict[str, int], dict[str, list[str]]]:
+    """
+    CPU-bound: PTT parse + fuzzy match + rank.
+    Runs in a thread pool via asyncio.to_thread so multiple sources
+    filter in parallel instead of serialising on the event loop.
+    filt is read-only after __init__ → thread-safe.
+    Each stream dict belongs to one source → no cross-thread mutation.
+    """
+    valid: list[dict] = []
+    rej_counts:   dict[str, int]        = {}
+    rej_examples: dict[str, list[str]]  = {}
+
+    for s in streams:
+        if filt.is_valid(s):
+            ranking.rank(s)
+            if library_priority and s.get("source") == "Library":
+                s["rank"] += LIBRARY_BONUS
+            valid.append(s)
+        else:
+            reason = s.get("invalid_reason", "Unknown")
+            key    = reason.split(":")[0]
+            rej_counts[key] = rej_counts.get(key, 0) + 1
+            detail = _reject_detail(s, reason)
+            bucket = rej_examples.setdefault(key, [])
+            if detail and detail not in bucket and len(bucket) < 3:
+                bucket.append(detail)
+
+    return valid, rej_counts, rej_examples
+
 
 def _deaccent(text: str) -> str:
     """NFD → ASCII. & → 'and' pour le matching de titre."""

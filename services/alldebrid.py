@@ -50,7 +50,7 @@ class AllDebridClient:
     def __init__(self, api_key: str) -> None:
         self.api_key = api_key
         self.client  = httpx.AsyncClient(
-            limits=httpx.Limits(max_connections=40, max_keepalive_connections=8),
+            limits=httpx.Limits(max_connections=40, max_keepalive_connections=8, keepalive_expiry=30.0),
             timeout=15,
             follow_redirects=True,
         )

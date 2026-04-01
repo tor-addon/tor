@@ -87,7 +87,7 @@ class WawacityClient:
         self._timeout = timeout
         self.client   = httpx.AsyncClient(
             headers=_HEADERS,
-            limits=httpx.Limits(max_connections=8, max_keepalive_connections=4),
+            limits=httpx.Limits(max_connections=8, max_keepalive_connections=4, keepalive_expiry=30.0),
             timeout=timeout,
         )
 

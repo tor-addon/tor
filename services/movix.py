@@ -87,12 +87,12 @@ class MovixClient:
     def __init__(self, base_url: str = "") -> None:
         self._client_dw = httpx.AsyncClient(
             headers=_DARKIWORLD_HEADERS,
-            limits=httpx.Limits(max_connections=8, max_keepalive_connections=4),
+            limits=httpx.Limits(max_connections=8, max_keepalive_connections=4, keepalive_expiry=30.0),
             timeout=8,
         )
         self._client_dec = httpx.AsyncClient(
             headers=_DECODE_HEADERS,
-            limits=httpx.Limits(max_connections=4, max_keepalive_connections=2),
+            limits=httpx.Limits(max_connections=4, max_keepalive_connections=2, keepalive_expiry=30.0),
             timeout=10,
         )
 
